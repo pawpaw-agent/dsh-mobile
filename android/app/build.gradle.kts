@@ -7,8 +7,6 @@ android {
     namespace = "com.pimobile.app"
     compileSdk = 34
 
-    // 固定 debug 签名：CI 与本地用同一 keystore，
-    // 保证 debug APK 可直接 install -r 覆盖升级，不必先 uninstall。
     signingConfigs {
         getByName("debug") {
             storeFile = file("debug.keystore")
@@ -44,16 +42,9 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-
-
 }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.webkit:webkit:1.9.0")
-    // SSE 长连接（后台任务完成通知）
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
-    // 生命周期感知（前后台检测启停 Service）
-    implementation("androidx.lifecycle:lifecycle-process:2.7.0")
 }

@@ -2,16 +2,12 @@ package com.pimobile.app
 
 import android.app.Activity
 import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -23,9 +19,6 @@ import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.TextView
-import androidx.lifecycle.DefaultLifecycleObserver
-import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.ProcessLifecycleOwner
 
 class MainActivity : Activity() {
     private var webView: WebView? = null
@@ -54,9 +47,6 @@ class MainActivity : Activity() {
             setBackgroundColor(COL_BG)
         }
 
-        // ── 复用 Application 级单例 WebView ──────────────────────────────
-        // 进程存活期间 WebView 跨 Activity 存活（转屏 configChanges 不重建 + 最近任务返回复用）。
-        // 关键：只在 currentUrl 为空时才 loadUrl，避免覆盖上次的页面状态。
         val reused = app.retainedWebView != null
         webView = (app.retainedWebView ?: WebView(this).also { app.retainedWebView = it }).apply {
             (parent as? ViewGroup)?.removeView(this)
@@ -74,18 +64,14 @@ class MainActivity : Activity() {
                     useWideViewPort = true
                 }
                 webViewClient = object : WebViewClient() {
-                    // 加载成功隐藏错误页
                     override fun onPageFinished(view: WebView?, url: String?) {
                         errorView?.visibility = View.GONE
                     }
-                    // 网络/资源错误（DNS、连接拒绝、超时）
                     override fun onReceivedError(
                         view: WebView?, request: WebResourceRequest?, error: WebResourceError?
                     ) {
-                        // 只对主帧错误显示错误页，避免子资源 404 也弹出
                         if (request?.isForMainFrame == true) showErrorPage()
                     }
-                    // HTTP 错误码（4xx/5xx）
                     override fun onReceivedHttpError(
                         view: WebView?, request: WebResourceRequest?, errorResponse: android.webkit.WebResourceResponse?
                     ) {
@@ -106,17 +92,9 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
         setContentView(root)
 
-        // Android 13+ 需运行时申请通知权限（后台任务完成通知依赖）
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
-        }
-
         val savedUrl = prefs.getString("url", null)
         val currentUrl = webView?.url
         val needLoad = currentUrl.isNullOrBlank() && savedUrl != null
-        Log.d("PiMobile", "onCreate: reused=$reused currentUrl=$currentUrl needLoad=$needLoad")
         if (needLoad && savedUrl != null) {
             connectView?.visibility = View.GONE
             lastUrl = savedUrl
@@ -124,18 +102,6 @@ class MainActivity : Activity() {
         } else if (reused && !currentUrl.isNullOrBlank()) {
             connectView?.visibility = View.GONE
         }
-
-        // 前后台检测：退到后台时启动 SSE 服务，回到前台时停止
-        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onStop(owner: LifecycleOwner) {
-                Log.d("PiMobile", "app→background: start SSE service")
-                PiSseService.start(this@MainActivity)
-            }
-            override fun onStart(owner: LifecycleOwner) {
-                Log.d("PiMobile", "app→foreground: stop SSE service")
-                PiSseService.stop(this@MainActivity)
-            }
-        })
     }
 
     override fun onResume() {
@@ -144,23 +110,8 @@ class MainActivity : Activity() {
         webView?.resumeTimers()
     }
 
-    // 处理通知点击的 deep link：pi-mobile://session/<id> → baseUrl/?session=<id>
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        val sid = intent.data?.lastPathSegment
-        if (sid != null) {
-            val base = getSharedPreferences("pi-mobile", Context.MODE_PRIVATE).getString("url", null)
-            if (!base.isNullOrBlank()) {
-                val url = base.trimEnd('/') + "/?session=" + sid
-                lastUrl = url
-                webView?.loadUrl(url)
-            }
-        }
-    }
-
     override fun onPause() {
         super.onPause()
-        // 暂停定时器省电；SSE 连接本身不断（由后台通知方案的 FGS 接管）
         webView?.onPause()
         webView?.pauseTimers()
     }
@@ -180,7 +131,7 @@ class MainActivity : Activity() {
         }
 
         column.addView(TextView(this).apply {
-            text = "π Pi Mobile"; textSize = 28f; setTextColor(COL_TITLE)
+            text = "Pi Mobile"; textSize = 28f; setTextColor(COL_TITLE)
         })
         column.addView(TextView(this).apply {
             text = "Connect to pi-web on your laptop"; textSize = 14f; setTextColor(COL_MUTED)
@@ -188,7 +139,6 @@ class MainActivity : Activity() {
 
         column.addView(spacer(dp(32)))
 
-        // 协议选择（http / https），支持 HTTPS 隧道场景
         val httpBtn = RadioButton(this).apply { id = View.generateViewId(); text = "http"; setTextColor(COL_TEXT) }
         val httpsBtn = RadioButton(this).apply { id = View.generateViewId(); text = "https"; setTextColor(COL_TEXT) }
         val protocolGroup = RadioGroup(this).apply {
@@ -224,7 +174,6 @@ class MainActivity : Activity() {
         return wrapper
     }
 
-    // ── 小工具 ──────────────────────────────────────────────────────
     private fun spacer(h: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, h) }
 
     private fun LinearLayout.addEditText(hint: String, default: String? = null): EditText =
@@ -289,10 +238,6 @@ class MainActivity : Activity() {
         if (hasFocus) applyFullscreen()
     }
 
-    /**
-     * 返回键：连接屏可见→退后台；WebView 有历史→goBack；否则退后台保活。
-     * 用平台 onBackPressed（无 androidx.activity 依赖，契合纯 WebView 壳）。
-     */
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
         when {
