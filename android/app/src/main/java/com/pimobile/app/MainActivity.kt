@@ -96,10 +96,6 @@ class MainActivity : Activity() {
                     view: WebView?, handler: HttpAuthHandler?, host: String?, realm: String?
                 ) {
                     handler ?: return
-                    if (handler.useHttpAuthUsernamePassword()) {
-                        val up = view?.httpAuthUsernamePassword(host, realm)
-                        if (up != null) { handler.proceed(up.first, up.second); return }
-                    }
                     showAuthDialog(handler, host)
                 }
             }
