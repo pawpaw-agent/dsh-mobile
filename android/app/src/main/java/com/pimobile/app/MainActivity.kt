@@ -193,11 +193,46 @@ class MainActivity : Activity() {
             }
         }, rowParams(top = dp(12), height = dp(48), width = dp(300)))
 
+        column.addView(Button(this).apply {
+            text = "切回旧布局"; setTextColor(COL_TEXT); setBackgroundColor(COL_INPUT_BG)
+            setOnClickListener { switchToLegacyLayout() }
+        }, rowParams(top = dp(12), height = dp(48), width = dp(300)))
+
         column.addView(TextView(this).apply {
             text = "Enter your opencode web server address"
             textSize = 12f; setTextColor(COL_DIM); gravity = Gravity.CENTER
         }, rowParams(top = dp(24)))
         return wrapper
+    }
+
+    // ── opencode 布局切换 ─────────────────────────────────────────
+    // opencode web ≥1.17.19 自动启用新布局，但 Web 端没有切换开关
+    //（layoutTransitionEligible 仅桌面版 onboarding 设置，见上游 issue #37546）。
+    // 这里直接在 localStorage 写 workaround：切回旧布局并放行切换开关。
+
+    private fun switchToLegacyLayout() {
+        val currentUrl = webView?.url
+        if (currentUrl.isNullOrBlank() || !(currentUrl.startsWith("http://") || currentUrl.startsWith("https://"))) {
+            AlertDialog.Builder(this)
+                .setTitle("需要先连接服务器")
+                .setMessage("请先连接 opencode 服务器，再回来切换布局。")
+                .setPositiveButton("好的", null)
+                .show()
+            return
+        }
+        val js = """
+            (function(){
+              try {
+                var d = JSON.parse(localStorage.getItem("settings.v3") || "{}");
+                d.general = d.general || {};
+                d.general.newLayoutDesigns = false;
+                d.general.layoutTransitionEligible = true;
+                localStorage.setItem("settings.v3", JSON.stringify(d));
+                location.reload();
+              } catch(e) {}
+            })();
+        """.trimIndent()
+        webView?.evaluateJavascript(js, null)
     }
 
     // ── 认证（opencode server 的 Basic Auth）──────────────────────
@@ -327,6 +362,8 @@ class MainActivity : Activity() {
         when {
             connectView?.visibility == View.VISIBLE -> moveTaskToBack(true)
             webView?.canGoBack() == true -> webView?.goBack()
+            // 已加载页面但无更早历史 → 回连接屏（切布局 / 换服务器）
+            webView?.url?.startsWith("http") == true -> connectView?.visibility = View.VISIBLE
             else -> moveTaskToBack(true)
         }
     }
