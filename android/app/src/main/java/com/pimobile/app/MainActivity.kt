@@ -1,13 +1,17 @@
 package com.pimobile.app
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.os.Build
 import android.os.Bundle
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.CookieManager
+import android.webkit.HttpAuthHandler
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -25,6 +29,7 @@ class MainActivity : Activity() {
     private var connectView: View? = null
     private var errorView: View? = null
     private var lastUrl: String? = null
+    private var pendingAuth: HttpAuthHandler? = null
 
     private companion object {
         const val COL_BG = 0xFF1A1A2E.toInt()
@@ -35,6 +40,7 @@ class MainActivity : Activity() {
         const val COL_INPUT_BG = 0x33FFFFFF.toInt()
         const val COL_MUTED = 0xB3FFFFFF.toInt()
         const val COL_DIM = 0x80FFFFFF.toInt()
+        const val UA_MARKER = "PiMobile/1.0"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,37 +56,57 @@ class MainActivity : Activity() {
         val reused = app.retainedWebView != null
         webView = (app.retainedWebView ?: WebView(this).also { app.retainedWebView = it }).apply {
             (parent as? ViewGroup)?.removeView(this)
-            if (!reused) {
-                settings.apply {
-                    javaScriptEnabled = true
-                    domStorageEnabled = true
-                    allowFileAccess = false
-                    allowContentAccess = false
-                    builtInZoomControls = true
-                    displayZoomControls = false
-                    setSupportZoom(true)
-                    userAgentString = settings.userAgentString.replace("Android", "PiMobile/1.0 Android")
-                    loadWithOverviewMode = true
-                    useWideViewPort = true
+            // 幂等：只叠加一次 UA 标识，不改写原始 UA
+            if (!settings.userAgentString.contains(UA_MARKER)) {
+                settings.userAgentString = settings.userAgentString + " " + UA_MARKER
+            }
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                databaseEnabled = true
+                allowFileAccess = false
+                allowContentAccess = false
+                builtInZoomControls = true
+                displayZoomControls = false
+                setSupportZoom(true)
+                loadWithOverviewMode = true
+                useWideViewPort = true
+            }
+            // 每次都重设 client，绑定到当前 Activity（retainedWebView 复用时旧 client 失效）
+            webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    hideErrorPage()
                 }
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        errorView?.visibility = View.GONE
+                override fun onReceivedError(
+                    view: WebView?, request: WebResourceRequest?, error: WebResourceError?
+                ) {
+                    if (request?.isForMainFrame == true) {
+                        showErrorPage(error?.description?.toString() ?: "网络错误")
                     }
-                    override fun onReceivedError(
-                        view: WebView?, request: WebResourceRequest?, error: WebResourceError?
-                    ) {
-                        if (request?.isForMainFrame == true) showErrorPage()
+                }
+                override fun onReceivedHttpError(
+                    view: WebView?, request: WebResourceRequest?, errorResponse: android.webkit.WebResourceResponse?
+                ) {
+                    if (request?.isForMainFrame == true) {
+                        showErrorPage("HTTP ${errorResponse?.statusCode}")
                     }
-                    override fun onReceivedHttpError(
-                        view: WebView?, request: WebResourceRequest?, errorResponse: android.webkit.WebResourceResponse?
-                    ) {
-                        if (request?.isForMainFrame == true) showErrorPage()
+                }
+                // opencode server 设了 OPENCODE_SERVER_PASSWORD 时走这里，否则 401 白屏打不开
+                override fun onReceivedHttpAuthRequest(
+                    view: WebView?, handler: HttpAuthHandler?, host: String?, realm: String?
+                ) {
+                    handler ?: return
+                    if (handler.useHttpAuthUsernamePassword()) {
+                        val up = view?.httpAuthUsernamePassword(host, realm)
+                        if (up != null) { handler.proceed(up.first, up.second); return }
                     }
+                    showAuthDialog(handler, host)
                 }
             }
         }
         root.addView(webView)
+
+        CookieManager.getInstance().setAcceptCookie(true)
 
         connectView = createConnectView(prefs)
         root.addView(connectView)
@@ -92,14 +118,17 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
         setContentView(root)
 
+        // 自动连接：savedUrl 存在且当前 WebView 没有在加载它时才 loadUrl，
+        // 否则保留 retainedWebView 的页面状态。
         val savedUrl = prefs.getString("url", null)
         val currentUrl = webView?.url
-        val needLoad = currentUrl.isNullOrBlank() && savedUrl != null
-        if (needLoad && savedUrl != null) {
+        val baseMatch = savedUrl != null && currentUrl != null &&
+            currentUrl.trimEnd('/').startsWith(savedUrl.trimEnd('/'))
+        if (savedUrl != null && !baseMatch) {
             connectView?.visibility = View.GONE
             lastUrl = savedUrl
             webView?.loadUrl(savedUrl)
-        } else if (reused && !currentUrl.isNullOrBlank()) {
+        } else if (!currentUrl.isNullOrBlank()) {
             connectView?.visibility = View.GONE
         }
     }
@@ -134,7 +163,7 @@ class MainActivity : Activity() {
             text = "Pi Mobile"; textSize = 28f; setTextColor(COL_TITLE)
         })
         column.addView(TextView(this).apply {
-            text = "Connect to pi-web on your laptop"; textSize = 14f; setTextColor(COL_MUTED)
+            text = "Connect to opencode web on your computer"; textSize = 14f; setTextColor(COL_MUTED)
         }, rowParams(top = dp(8)))
 
         column.addView(spacer(dp(32)))
@@ -149,7 +178,7 @@ class MainActivity : Activity() {
         column.addView(protocolGroup, rowParams(top = dp(8), width = dp(300)))
 
         val hostInput = column.addEditText("100.x.x.x or hostname.ts.net")
-        val portInput = column.addEditText("7777", "7777")
+        val portInput = column.addEditText("4096", "4096")
         column.addView(spacer(dp(24)))
 
         column.addView(Button(this).apply {
@@ -157,9 +186,10 @@ class MainActivity : Activity() {
             setOnClickListener {
                 val host = hostInput.text.toString().trim()
                 if (host.isBlank()) return@setOnClickListener
-                val port = portInput.text.toString().trim().ifEmpty { "7777" }
+                val port = portInput.text.toString().trim().ifEmpty { "4096" }
                 val proto = if (protocolGroup.checkedRadioButtonId == httpsBtn.id) "https" else "http"
                 val url = "$proto://$host:$port"
+                hideErrorPage()
                 connectView?.visibility = View.GONE
                 prefs.edit().putString("url", url).apply()
                 lastUrl = url
@@ -168,11 +198,100 @@ class MainActivity : Activity() {
         }, rowParams(top = dp(12), height = dp(48), width = dp(300)))
 
         column.addView(TextView(this).apply {
-            text = "Enter your pi-web server address to connect"
+            text = "Enter your opencode web server address"
             textSize = 12f; setTextColor(COL_DIM); gravity = Gravity.CENTER
         }, rowParams(top = dp(24)))
         return wrapper
     }
+
+    // ── 认证（opencode server 的 Basic Auth）──────────────────────
+
+    private fun showAuthDialog(handler: HttpAuthHandler, host: String?) {
+        if (pendingAuth != null) { handler.cancel(); return }
+        pendingAuth = handler
+
+        val usernameInput = EditText(this).apply {
+            hint = "username"; setText("opencode")
+            setTextColor(COL_TEXT); setHintTextColor(COL_HINT); setBackgroundColor(COL_INPUT_BG)
+        }
+        val passwordInput = EditText(this).apply {
+            hint = "password"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setTextColor(COL_TEXT); setHintTextColor(COL_HINT); setBackgroundColor(COL_INPUT_BG)
+        }
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(16), dp(24), dp(16))
+            addView(usernameInput)
+            addView(passwordInput, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(12) })
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("${host ?: "服务器"}需要登录")
+            .setView(layout)
+            .setPositiveButton("登录") { _, _ ->
+                pendingAuth?.proceed(usernameInput.text.toString(), passwordInput.text.toString())
+                pendingAuth = null
+            }
+            .setNegativeButton("取消") { _, _ ->
+                pendingAuth?.cancel()
+                pendingAuth = null
+            }
+            .setOnDismissListener { pendingAuth = null }
+            .show()
+    }
+
+    // ── 错误页（可重试 / 换服务器，避免白屏卡死）────────────────
+
+    private fun showErrorPage(message: String) {
+        if (errorView == null) {
+            errorView = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(COL_BG)
+                gravity = Gravity.CENTER
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                addView(TextView(this@MainActivity).apply {
+                    text = "连接失败"; textSize = 20f; setTextColor(COL_TEXT)
+                    gravity = Gravity.CENTER
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = "检查地址、端口和网络后重试"; textSize = 14f; setTextColor(COL_MUTED)
+                    gravity = Gravity.CENTER
+                }, rowParams(top = dp(8)))
+                addView(Button(this@MainActivity).apply {
+                    text = "重试"; setTextColor(COL_TEXT); setBackgroundColor(COL_ACCENT)
+                    setOnClickListener {
+                        hideErrorPage()
+                        lastUrl?.let { webView?.loadUrl(it) }
+                    }
+                }, rowParams(top = dp(24), height = dp(48), width = dp(160)))
+                addView(Button(this@MainActivity).apply {
+                    text = "换服务器"; setTextColor(COL_TEXT); setBackgroundColor(COL_INPUT_BG)
+                    setOnClickListener {
+                        hideErrorPage()
+                        connectView?.visibility = View.VISIBLE
+                    }
+                }, rowParams(top = dp(12), height = dp(48), width = dp(160)))
+            }
+            (webView?.parent as? ViewGroup)?.addView(errorView)
+        }
+        // 更新错误详情
+        val msgView = (errorView as? LinearLayout)?.getChildAt(1) as? TextView
+        msgView?.text = message
+        errorView?.visibility = View.VISIBLE
+    }
+
+    private fun hideErrorPage() {
+        errorView?.visibility = View.GONE
+    }
+
+    // ── 小工具 ──────────────────────────────────────────────────────
 
     private fun spacer(h: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, h) }
 
@@ -188,37 +307,6 @@ class MainActivity : Activity() {
         LinearLayout.LayoutParams(width, height).apply { topMargin = top }
 
     private fun dp(n: Int) = (n * resources.displayMetrics.density + 0.5f).toInt()
-
-    private fun showErrorPage() {
-        if (errorView == null) {
-            errorView = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setBackgroundColor(COL_BG)
-                gravity = Gravity.CENTER
-                layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-                addView(TextView(this@MainActivity).apply {
-                    text = "连不上 pi-web"; textSize = 20f; setTextColor(COL_TEXT)
-                    gravity = Gravity.CENTER
-                })
-                addView(TextView(this@MainActivity).apply {
-                    text = "检查地址、端口和网络后重试"; textSize = 14f; setTextColor(COL_MUTED)
-                    gravity = Gravity.CENTER
-                }, rowParams(top = dp(8)))
-                addView(Button(this@MainActivity).apply {
-                    text = "重试"; setTextColor(COL_TEXT); setBackgroundColor(COL_ACCENT)
-                    setOnClickListener {
-                        errorView?.visibility = View.GONE
-                        lastUrl?.let { webView?.loadUrl(it) }
-                    }
-                }, rowParams(top = dp(24), height = dp(48), width = dp(160)))
-            }
-            (webView?.parent as? ViewGroup)?.addView(errorView)
-        }
-        errorView?.visibility = View.VISIBLE
-    }
 
     private fun applyFullscreen() {
         window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
