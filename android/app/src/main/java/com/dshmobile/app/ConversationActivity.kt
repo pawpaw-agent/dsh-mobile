@@ -669,20 +669,94 @@ class ConversationActivity : Activity() {
             ui.post {
                 if (r !is Rpc.Result.Ok) { toast("获取模型失败: ${errText(r)}"); return@post }
                 val m = Models.SessionModels.fromJson(r.value)
-                val flat = ArrayList<Pair<String, Models.CatalogModel>>()
-                for (g in m.groups) for (mdl in g.models) flat.add(g.id to mdl)
-                if (flat.isEmpty()) { toast("无可用模型"); return@post }
-                val current = m.current?.model
-                AlertDialog.Builder(this)
-                    .setTitle("选择模型（当前 ${current ?: "-"}）")
-                    .setItems(flat.map { it.second.name }.toTypedArray()) { _, which ->
-                        val p = flat[which]
-                        Thread { client.sessionSelectModel(sid, p.first, p.second.id) }.start()
-                        toast("已选: ${p.second.name}")
-                    }
-                    .show()
+                if (m.groups.isEmpty() || m.groups.all { it.models.isEmpty() }) {
+                    toast("无可用模型"); return@post
+                }
+                showModelPicker(sid, m)
             }
         }.start()
+    }
+
+    /**
+     * 模型选择器：按 provider 分组展示，当前模型打 ● 标记，顶部输入框支持过滤。
+     * 列表项 = [●/○] [provider] model-name（reasoningEffort 附注）。
+     */
+    private fun showModelPicker(sid: String, m: Models.SessionModels) {
+        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val filter = EditText(this).apply {
+            hint = "过滤模型名…"
+            setSingleLine(true)
+            setTextColor(COL_TEXT); setHintTextColor(COL_MUTED); setBackgroundColor(0x33FFFFFF)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        container.addView(filter, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { setMargins(dp(16), dp(12), dp(16), dp(4)) })
+
+        // 全量扁平列表 + 原地渲染（复用同一个 ListView-like LinearLayout）
+        data class Item(val provider: String, val model: Models.CatalogModel, val current: Boolean)
+        val all = ArrayList<Item>()
+        for (g in m.groups) for (mdl in g.models) {
+            all.add(Item(g.id, mdl, m.current?.model == mdl.id && m.current.provider == g.id))
+        }
+        val listHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val scroll = ScrollView(this).apply { addView(listHost) }
+        container.addView(scroll, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+        ))
+
+        fun render(query: String) {
+            listHost.removeAllViews()
+            val q = query.trim().lowercase()
+            var shown = 0
+            for (g in m.groups) {
+                val matches = g.models.filter { q.isEmpty() || it.name.lowercase().contains(q) || it.id.lowercase().contains(q) || g.id.lowercase().contains(q) }
+                if (matches.isEmpty()) continue
+                // 组标题
+                listHost.addView(TextView(this).apply {
+                    text = "─ ${g.name.ifBlank { g.id }} ─"
+                    textSize = 12f; setTextColor(COL_MUTED); typeface = Typeface.MONOSPACE
+                    setPadding(dp(16), dp(10), dp(16), dp(2))
+                })
+                for (mdl in matches) {
+                    val item = all.first { it.provider == g.id && it.model.id == mdl.id }
+                    val row = TextView(this).apply {
+                        text = "${if (item.current) "● " else "○ "}${mdl.name}  (${mdl.id})"
+                        textSize = 14f
+                        setTextColor(if (item.current) COL_ACCENT else COL_TEXT)
+                        setPadding(dp(20), dp(10), dp(16), dp(10))
+                        setBackgroundColor(if (item.current) 0x22E94560.toInt() else 0x00000000)
+                    }
+                    row.setOnClickListener {
+                        Thread { client.sessionSelectModel(sid, g.id, mdl.id) }.start()
+                        toast("已选: ${mdl.name}")
+                    }
+                    listHost.addView(row)
+                    shown++
+                }
+            }
+            if (shown == 0) {
+                listHost.addView(TextView(this).apply {
+                    text = "无匹配模型"; textSize = 13f; setTextColor(COL_MUTED)
+                    setPadding(dp(16), dp(12), dp(16), dp(12))
+                })
+            }
+        }
+        render("")
+        filter.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) { render(s?.toString() ?: "") }
+        })
+
+        val failures = m.failures
+        val title = "选择模型（当前 ${m.current?.model ?: "-"}）" +
+            if (failures.isNotEmpty()) " · ${failures.size} 个 provider 不可用" else ""
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(container)
+            .setPositiveButton("关闭", null)
+            .show()
     }
 
     private fun showSkills() {
