@@ -223,8 +223,7 @@ class ConversationActivity : Activity() {
 
     private fun openSession(sid: String) {
         sessionId = sid
-        streamingText = StringBuilder()
-        streamingView = null
+        resetStreaming()
         ui.post {
             titleView.text = "会话 ${sid.take(8)}"
             transcript.removeAllViews()
@@ -299,7 +298,21 @@ class ConversationActivity : Activity() {
         }
     }
 
-    /** 实时事件处理（地面真值：assistant/chunk 的 data.chunk={type,index,text}）。 */
+    // ── 流式缓冲（assistant/chunk 按 content-block index 分块）──
+    // 真实 wire：block-start(index,blockType) → text-delta/reasoning-delta(index 同)…
+    // → block-end(index, block 完整文本) → 下一个 block(index+1，可为 tool-call)。
+    // 同一 step 内 text 与 tool-call 是不同 block，必须按 index 分开渲染。
+    private var streamBlocks = HashMap<Int, StringBuilder>()
+    private var streamViews = HashMap<Int, TextView>()
+
+    private fun resetStreaming() {
+        streamBlocks = HashMap()
+        streamViews = HashMap()
+        streamingText = StringBuilder()
+        streamingView = null
+    }
+
+    /** 实时事件处理（chunk 语义对照 docs/dsh-protocol.md 与线上实测）。 */
     private fun handleEvent(event: JSONObject) {
         when (event.optString("type")) {
             EV_USER -> {
@@ -308,10 +321,28 @@ class ConversationActivity : Activity() {
             EV_CHUNK -> {
                 val chunk = event.optJSONObject("data")?.optJSONObject("chunk") ?: return
                 when (chunk.optString("type")) {
+                    "block-start" -> { /* 新 block：缓冲惰性创建 */ }
                     "text-delta", "reasoning-delta" -> {
-                        streamingText.append(chunk.optString("text"))
-                        updateStreaming()
+                        val idx = chunk.optInt("index", 0)
+                        val sb = streamBlocks.getOrPut(idx) { StringBuilder() }
+                        sb.append(chunk.optString("text"))
+                        updateStreaming(idx)
                     }
+                    "block-end" -> {
+                        // 服务端给的完整 block 文本：以它为准（覆盖增量累积，防丢字）
+                        val idx = chunk.optInt("index", 0)
+                        val block = chunk.optJSONObject("block")
+                        if (block?.optString("type") == "text") {
+                            streamBlocks[idx] = StringBuilder(block.optString("text"))
+                            updateStreaming(idx)
+                        }
+                    }
+                    "tool-call-delta" -> {
+                        // 工具调用名/参数增量：收到 name 即展示一行
+                        val name = chunk.optString("name")
+                        if (name.isNotEmpty()) appendToolLine("🔧 $name …")
+                    }
+                    "finish" -> finishStreaming()
                 }
             }
             EV_ASSISTANT -> finishStreaming()
@@ -324,6 +355,29 @@ class ConversationActivity : Activity() {
                 "   ↳ " + extractResultText(event.optJSONObject("data")).take(160)
             )
         }
+    }
+
+    /** 渲染/刷新指定 block 的气泡（每个 text block 一个气泡）。 */
+    private fun updateStreaming(idx: Int) {
+        val text = streamBlocks[idx]?.toString() ?: return
+        if (text.isEmpty()) return
+        val v = streamViews[idx]
+        if (v == null) {
+            val tv = makeBubble(text, COL_ASSIST, left = false)
+            streamViews[idx] = tv
+            transcript.addView(tv)
+        } else {
+            v.text = text
+        }
+        ensureScrollBottom()
+    }
+
+    private fun finishStreaming() {
+        // 落定所有未完成的 block 气泡（保留内容，断开引用）
+        streamViews.clear()
+        streamBlocks.clear()
+        streamingView = null
+        streamingText = StringBuilder()
     }
 
     /** 历史 entry（event + 可选 host 计算的 view.card）。 */
@@ -444,24 +498,6 @@ class ConversationActivity : Activity() {
     }
 
     // ── 渲染辅助 ─────────────────────────────────────────────
-    private fun updateStreaming() {
-        if (streamingView == null) {
-            streamingView = makeBubble(streamingText.toString(), COL_ASSIST, left = false)
-            transcript.addView(streamingView)
-        } else {
-            (streamingView as TextView).text = streamingText.toString()
-        }
-        ensureScrollBottom()
-    }
-
-    private fun finishStreaming() {
-        val v = streamingView ?: return
-        if (streamingText.isBlank()) {
-            transcript.removeView(v) // 空 assistant/message 只承载 usage
-        }
-        streamingView = null
-        streamingText = StringBuilder()
-    }
 
     private fun appendBubble(text: String, color: Int, left: Boolean) {
         transcript.addView(makeBubble(text, color, left))
