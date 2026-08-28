@@ -190,7 +190,9 @@ class ConversationActivity : Activity() {
         }
     }
 
-    /** 处理实时 session/event：文本/推理增量 → 滚动追加。 */
+    /** 处理实时 session/event：文本/推理增量 → 滚动追加。
+     *  真实线上格式（地面真值）：assistant/chunk 的 data.chunk = {type, index, text}。
+     */
     private fun handleEvent(event: JSONObject) {
         val type = event.optString("type")
         val data = event.optJSONObject("data")
@@ -199,7 +201,7 @@ class ConversationActivity : Activity() {
                 val t = extractText(data)
                 if (t != null) appendBubble(t, COL_USER, left = true)
             }
-            "assistant/stream" -> {
+            "assistant/chunk" -> {
                 val chunk = data?.optJSONObject("chunk")
                 val dt = chunk?.optString("type")
                 when (dt) {
