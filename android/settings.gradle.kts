@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "PiMobile"
+rootProject.name = "DshMobile"
 include(":app")

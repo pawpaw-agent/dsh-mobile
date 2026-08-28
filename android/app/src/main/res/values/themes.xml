@@ -6,7 +6,7 @@
   - 仅保留状态栏/导航栏颜色与窗口背景。
 -->
 <resources>
-    <style name="Theme.PiMobile" parent="@android:style/Theme.Material.NoActionBar">
+    <style name="Theme.DshMobile" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:statusBarColor">#0a2647</item>
         <item name="android:navigationBarColor">#0a2647</item>
         <item name="android:windowBackground">#1A1A2E</item>

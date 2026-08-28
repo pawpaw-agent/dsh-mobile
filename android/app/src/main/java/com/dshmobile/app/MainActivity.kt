@@ -1,4 +1,4 @@
-package com.pimobile.app
+package com.dshmobile.app
 
 import android.app.Activity
 import android.app.AlertDialog
@@ -23,7 +23,16 @@ import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.TextView
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 
+/**
+ * dsh-mobile: DeepSeek Harness 手机端 —— Android 全屏 WebView 壳。
+ *
+ * 连接运行在笔记本/VPS 上的 `dsh --profile web`（默认 http://<host>:3080），
+ * 提供与桌面一致的 DeepSeek Harness Web UI 体验。App 本身不代理任何请求，
+ * 所有能力由服务端的 dsh web + 用户自己的 provider 配置提供。
+ */
 class MainActivity : Activity() {
     private var webView: WebView? = null
     private var connectView: View? = null
@@ -40,14 +49,38 @@ class MainActivity : Activity() {
         const val COL_INPUT_BG = 0x33FFFFFF.toInt()
         const val COL_MUTED = 0xB3FFFFFF.toInt()
         const val COL_DIM = 0x80FFFFFF.toInt()
-        const val UA_MARKER = "PiMobile/1.0"
+        const val UA_MARKER = "DshMobile/1.0"
+        const val DEFAULT_PORT = "3080" // dsh --profile web 的默认端口
+
+        // dsh 前端 RPC 依赖 crypto.randomUUID；WebView 在局域网明文 HTTP
+        //（非安全上下文）下访问不到该 API，会导致全部 RPC 失败（白屏）。
+        // 标准 UUID v4 polyfill（幂等）：与 dsh-lan-access 插件的兜底一致，
+        // 这样 App 不依赖服务端是否装了插件。文档启动前注入，不干扰正常页面。
+        const val CRYPTO_POLYFILL = """
+            (function(){
+              try {
+                var C = window.Crypto;
+                if (C && !C.prototype.randomUUID) {
+                  C.prototype.randomUUID = function() {
+                    var b = crypto.getRandomValues(new Uint8Array(16));
+                    b[6] = (b[6] & 0x0f) | 0x40;
+                    b[8] = (b[8] & 0x3f) | 0x80;
+                    var h = [];
+                    for (var i = 0; i < 16; i++) h.push((b[i] + 256).toString(16).slice(1));
+                    return h.slice(0,4).join('') + '-' + h.slice(4,6).join('') + '-' +
+                           h.slice(6,8).join('') + '-' + h.slice(8,10).join('') + '-' + h.slice(10,16).join('');
+                  };
+                }
+              } catch(e) {}
+            })();
+        """.trimIndent()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val prefs = getSharedPreferences("pi-mobile", Context.MODE_PRIVATE)
-        val app = application as PiApp
+        val prefs = getSharedPreferences("dsh-mobile", Context.MODE_PRIVATE)
+        val app = application as DshApp
 
         val root = FrameLayout(this).apply {
             setBackgroundColor(COL_BG)
@@ -72,6 +105,11 @@ class MainActivity : Activity() {
                 loadWithOverviewMode = true
                 useWideViewPort = true
             }
+            // dsh 前端在非安全上下文下没有 crypto.randomUUID（局域网 http 直连），
+            // 文档开始前注入兜底实现；服务端 dsh-lan-access 也注入同款（幂等）。
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                WebViewCompat.addDocumentStartJavaScript(this, CRYPTO_POLYFILL, setOf("*"))
+            }
             // 每次都重设 client，绑定到当前 Activity（retainedWebView 复用时旧 client 失效）
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
@@ -91,7 +129,7 @@ class MainActivity : Activity() {
                         showErrorPage("HTTP ${errorResponse?.statusCode}")
                     }
                 }
-                // opencode server 设了 OPENCODE_SERVER_PASSWORD 时走这里，否则 401 白屏打不开
+                // 隧道 / 反向代理带 Basic Auth 时走这里，否则 401 白屏打不开
                 override fun onReceivedHttpAuthRequest(
                     view: WebView?, handler: HttpAuthHandler?, host: String?, realm: String?
                 ) {
@@ -156,10 +194,10 @@ class MainActivity : Activity() {
         }
 
         column.addView(TextView(this).apply {
-            text = "Pi Mobile"; textSize = 28f; setTextColor(COL_TITLE)
+            text = "DSH Mobile"; textSize = 28f; setTextColor(COL_TITLE)
         })
         column.addView(TextView(this).apply {
-            text = "Connect to opencode web on your computer"; textSize = 14f; setTextColor(COL_MUTED)
+            text = "Connect to DeepSeek Harness on your computer"; textSize = 14f; setTextColor(COL_MUTED)
         }, rowParams(top = dp(8)))
 
         column.addView(spacer(dp(32)))
@@ -173,8 +211,8 @@ class MainActivity : Activity() {
         }
         column.addView(protocolGroup, rowParams(top = dp(8), width = dp(300)))
 
-        val hostInput = column.addEditText("100.x.x.x or hostname.ts.net")
-        val portInput = column.addEditText("4096", "4096")
+        val hostInput = column.addEditText("192.168.x.x / 100.x.x.x / tunnel domain")
+        val portInput = column.addEditText("port", DEFAULT_PORT)
         column.addView(spacer(dp(24)))
 
         column.addView(Button(this).apply {
@@ -182,7 +220,7 @@ class MainActivity : Activity() {
             setOnClickListener {
                 val host = hostInput.text.toString().trim()
                 if (host.isBlank()) return@setOnClickListener
-                val port = portInput.text.toString().trim().ifEmpty { "4096" }
+                val port = portInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
                 val proto = if (protocolGroup.checkedRadioButtonId == httpsBtn.id) "https" else "http"
                 val url = "$proto://$host:$port"
                 hideErrorPage()
@@ -193,56 +231,21 @@ class MainActivity : Activity() {
             }
         }, rowParams(top = dp(12), height = dp(48), width = dp(300)))
 
-        column.addView(Button(this).apply {
-            text = "切回旧布局"; setTextColor(COL_TEXT); setBackgroundColor(COL_INPUT_BG)
-            setOnClickListener { switchToLegacyLayout() }
-        }, rowParams(top = dp(12), height = dp(48), width = dp(300)))
-
         column.addView(TextView(this).apply {
-            text = "Enter your opencode web server address"
+            text = "Enter your dsh web (DeepSeek Harness) server address"
             textSize = 12f; setTextColor(COL_DIM); gravity = Gravity.CENTER
         }, rowParams(top = dp(24)))
         return wrapper
     }
 
-    // ── opencode 布局切换 ─────────────────────────────────────────
-    // opencode web ≥1.17.19 自动启用新布局，但 Web 端没有切换开关
-    //（layoutTransitionEligible 仅桌面版 onboarding 设置，见上游 issue #37546）。
-    // 这里直接在 localStorage 写 workaround：切回旧布局并放行切换开关。
-
-    private fun switchToLegacyLayout() {
-        val currentUrl = webView?.url
-        if (currentUrl.isNullOrBlank() || !(currentUrl.startsWith("http://") || currentUrl.startsWith("https://"))) {
-            AlertDialog.Builder(this)
-                .setTitle("需要先连接服务器")
-                .setMessage("请先连接 opencode 服务器，再回来切换布局。")
-                .setPositiveButton("好的", null)
-                .show()
-            return
-        }
-        val js = """
-            (function(){
-              try {
-                var d = JSON.parse(localStorage.getItem("settings.v3") || "{}");
-                d.general = d.general || {};
-                d.general.newLayoutDesigns = false;
-                d.general.layoutTransitionEligible = true;
-                localStorage.setItem("settings.v3", JSON.stringify(d));
-                location.reload();
-              } catch(e) {}
-            })();
-        """.trimIndent()
-        webView?.evaluateJavascript(js, null)
-    }
-
-    // ── 认证（opencode server 的 Basic Auth）──────────────────────
+    // ── 认证（隧道 / 反向代理的 Basic Auth）─────────────────────
 
     private fun showAuthDialog(handler: HttpAuthHandler, host: String?) {
         if (pendingAuth != null) { handler.cancel(); return }
         pendingAuth = handler
 
         val usernameInput = EditText(this).apply {
-            hint = "username"; setText("opencode")
+            hint = "username"
             setTextColor(COL_TEXT); setHintTextColor(COL_HINT); setBackgroundColor(COL_INPUT_BG)
         }
         val passwordInput = EditText(this).apply {
@@ -362,7 +365,7 @@ class MainActivity : Activity() {
         when {
             connectView?.visibility == View.VISIBLE -> moveTaskToBack(true)
             webView?.canGoBack() == true -> webView?.goBack()
-            // 已加载页面但无更早历史 → 回连接屏（切布局 / 换服务器）
+            // 已加载页面但无更早历史 → 回连接屏（换服务器）
             webView?.url?.startsWith("http") == true -> connectView?.visibility = View.VISIBLE
             else -> moveTaskToBack(true)
         }

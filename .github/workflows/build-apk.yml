@@ -1,4 +1,4 @@
-name: Build APK
+name: Dsh Mobile Build APK
 
 on:
   push:
@@ -37,5 +37,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: pi-mobile-debug
+          name: dsh-mobile-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk

@@ -1,6 +1,6 @@
 {
-  "name": "pi-mobile",
+  "name": "dsh-mobile",
   "version": "1.0.0",
   "private": true,
-  "description": "Mobile client for pi-web — Android WebView shell"
+  "description": "DeepSeek Harness mobile client — Android WebView shell"
 }

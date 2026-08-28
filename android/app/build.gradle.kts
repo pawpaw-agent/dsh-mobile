@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.pimobile.app"
+    namespace = "com.dshmobile.app"
     compileSdk = 34
 
     signingConfigs {
@@ -17,7 +17,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.pimobile.app"
+        applicationId = "com.dshmobile.app"
         minSdk = 26
         targetSdk = 34
         versionCode = 1

@@ -4,11 +4,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:name=".PiApp"
+        android:name=".DshApp"
         android:allowBackup="true"
-        android:label="Pi Mobile"
+        android:label="DSH Mobile"
         android:supportsRtl="true"
-        android:theme="@style/Theme.PiMobile"
+        android:theme="@style/Theme.DshMobile"
         android:usesCleartextTraffic="true">
 
         <activity
