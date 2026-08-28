@@ -431,10 +431,12 @@ class MainActivity : Activity() {
      */
     private fun applyImmersive() {
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
-        val c = androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-        c.hide(androidx.core.view.WindowInsetsCompat.Type.statusBars() or
-               androidx.core.view.WindowInsetsCompat.Type.navigationBars())
-        c.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        window.decorView.post {
+            val c = androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+            c.hide(androidx.core.view.WindowInsetsCompat.Type.statusBars() or
+                   androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+            c.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
