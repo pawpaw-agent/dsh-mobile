@@ -70,6 +70,9 @@ class ConversationActivity : Activity() {
         const val EV_CHUNK = "assistant/chunk"
         const val EV_TOOL_CALL = "tool/call"
         const val EV_TOOL_RESULT = "tool/result"
+
+        const val STATE_SESSION = "sessionId"
+        const val STATE_RUNNING = "running"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -620,10 +623,5 @@ class ConversationActivity : Activity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) applyFullscreen()
-    }
-
-    companion object {
-        private const val STATE_SESSION = "sessionId"
-        private const val STATE_RUNNING = "running"
     }
 }
