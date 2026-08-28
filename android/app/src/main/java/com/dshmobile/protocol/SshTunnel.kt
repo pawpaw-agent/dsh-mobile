@@ -2,7 +2,7 @@ package com.dshmobile.protocol
 
 import android.util.Log
 import net.schmizz.sshj.SSHClient
-import net.schmizz.sshj.localportforward.LocalPortForwarder
+import net.schmizz.sshj.connection.channel.direct.LocalPortForwarder
 import net.schmizz.sshj.connection.channel.direct.Parameters
 import net.schmizz.sshj.userauth.keyprovider.OpenSSHKeyFile
 import net.schmizz.sshj.userauth.password.PasswordUtils
@@ -52,7 +52,7 @@ class SshTunnel(
     private val started = AtomicBoolean(false)
     private val connecting = AtomicBoolean(false)
     @Volatile private var ssh: SSHClient? = null
-    @Volatile private var forwarder: Closeable? = null
+    @Volatile private var forwarder: LocalPortForwarder? = null
     @Volatile private var localPort: Int = 0
     @Volatile private var boundPort: Int = 0
     private var reconnectThread: Thread? = null
@@ -140,7 +140,7 @@ class SshTunnel(
     override fun close() {
         started.set(false)
         reconnectThread?.interrupt()
-        try { forwarder?.close() } catch (_: Exception) {}
+        try { forwarder?.stop() } catch (_: Exception) {}
         try { ssh?.disconnect() } catch (_: Exception) {}
         forwarder = null
         ssh = null
