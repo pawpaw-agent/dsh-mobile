@@ -148,40 +148,34 @@ class SshTunnel(
     }
 
     /**
-     * 构造 SSHClient，并把 Android 内置的「精简版 BouncyCastle」换成 sshj 依赖里的
-     * 完整版 bcprov：Android 平台的 BC 缺 X25519 / Ed25519，而 sshj 0.38 默认首选
-     * curve25519-sha256 KEX 与 ssh-ed25519 主机签名，导致
-     * "no such algorithm: X25519 for provider BC"。
+     * Android 版 SSH 配置：sshj 0.38 默认首选 Curve25519 / Ed25519，
+     * 但 Android 内置精简 BC 不支持，完整 bcprov 又会在低内存设备注册时 OOM。
+     * 因此这里显式绕开 X25519 / Ed25519，只保留 Android 原生支持的算法：
+     *   KEX:     ECDH NIST P-256/384/521 + DH group1/14
+     *   签名:    RSA / DSA
      *
-     * sshj 0.38 的 DefaultConfig 在 initKeyExchangeFactories 时会把
-     * Curve25519SHA256.Factory 放进列表，但真正失败发生在 create() 阶段；
-     * 因此只要在 new SSHClient() 之前把完整版 BC 提到最高优先级即可。
-     * 旧实现显式重设 kex/signature 列表会与 KeyAlgorithm 类型不匹配，故不覆盖。
+     * 注：AndroidConfig 自带 EdDSA25519，这里也去掉，避免 Ed25519。
      */
     private fun createClient(): SSHClient {
+        val cfg = net.schmizz.sshj.AndroidConfig()
         try {
-            // Android 内置精简 BC 无 X25519/Ed25519；换成完整版 bcprov（位置 1 优先）
-            val bc = org.bouncycastle.jce.provider.BouncyCastleProvider()
-            if (java.security.Security.getProvider(bc.name) == null) {
-                java.security.Security.insertProviderAt(bc, 1)
-            }
+            cfg.keyExchangeFactories = listOf(
+                net.schmizz.sshj.transport.kex.ECDHNistP.Factory256(),
+                net.schmizz.sshj.transport.kex.ECDHNistP.Factory384(),
+                net.schmizz.sshj.transport.kex.ECDHNistP.Factory521(),
+                net.schmizz.sshj.transport.kex.DHG14.Factory(),
+                net.schmizz.sshj.transport.kex.DHG1.Factory()
+            )
+            cfg.keyAlgorithms = listOf(
+                com.hierynomus.sshj.key.KeyAlgorithms.SSHRSA(),
+                com.hierynomus.sshj.key.KeyAlgorithms.RSASHA256(),
+                com.hierynomus.sshj.key.KeyAlgorithms.RSASHA512(),
+                com.hierynomus.sshj.key.KeyAlgorithms.SSHDSA()
+            )
         } catch (t: Throwable) {
-            Log.w(TAG, "sshj BC provider registration failed, falling back: ${t.message}")
+            Log.w(TAG, "sshj Android config setup failed, using defaults: ${t.message}")
         }
-        // 验证 X25519 是否真的可用；不可用则降级注册（removeProvider 只在确认新 BC 可用后才执行）
-        val bcProv = java.security.Security.getProvider("BC")
-        val x25519Ok = try {
-            java.security.KeyPairGenerator.getInstance("X25519", bcProv)
-            true
-        } catch (t: Throwable) {
-            Log.w(TAG, "sshj X25519 unavailable on provider '$bcProv': ${t.message}")
-            false
-        }
-        if (!x25519Ok && bcProv != null) {
-            // 退化：把所有曲线算法交给平台默认（旧 sshj 行为），不再硬性 remove
-            Log.w(TAG, "sshj falling back to platform security providers")
-        }
-        return SSHClient()
+        return SSHClient(cfg)
     }
 
     /** 主机公钥校验：有期望指纹则精确匹配，否则接受并记录（首连 TOFU 语义）。 */
