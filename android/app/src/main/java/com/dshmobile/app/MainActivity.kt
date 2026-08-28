@@ -56,7 +56,7 @@ class MainActivity : Activity() {
         //（非安全上下文）下访问不到该 API，会导致全部 RPC 失败（白屏）。
         // 标准 UUID v4 polyfill（幂等）：与 dsh-lan-access 插件的兜底一致，
         // 这样 App 不依赖服务端是否装了插件。文档启动前注入，不干扰正常页面。
-        const val CRYPTO_POLYFILL = """
+        val CRYPTO_POLYFILL = """
             (function(){
               try {
                 var C = window.Crypto;
