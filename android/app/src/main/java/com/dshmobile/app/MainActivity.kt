@@ -70,14 +70,27 @@ class MainActivity : Activity() {
         }
         column.addView(protocolGroup, rowParams(top = dp(8), width = dp(300)))
 
+        // 预填上次连接的地址（自动重连体验）
+        val saved = prefs.getString("url", null)
+        var prefillProto = "http"; var prefillHost = ""; var prefillPort = DEFAULT_PORT
+        if (saved != null) {
+            val m = Regex("^(https?)://([^:]+)(?::(\\d+))?$").find(saved.trim())
+            if (m != null) {
+                prefillProto = m.groupValues[1]; prefillHost = m.groupValues[2]
+                if (m.groupValues[3].isNotEmpty()) prefillPort = m.groupValues[3]
+            }
+        }
+        protocolGroup.check(if (prefillProto == "https") httpsBtn.id else httpBtn.id)
+
         val hostInput = EditText(this).apply {
             hint = "192.168.1.100 / 100.x.x.x / tunnel domain"
+            setText(prefillHost)
             setTextColor(COL_TEXT); setHintTextColor(COL_DIM); setBackgroundColor(0x33FFFFFF)
         }
         column.addView(hostInput, rowParams(top = dp(12), width = dp(300), height = dp(46)))
 
         val portInput = EditText(this).apply {
-            hint = "port"; setText(DEFAULT_PORT)
+            hint = "port"; setText(prefillPort)
             setTextColor(COL_TEXT); setHintTextColor(COL_DIM); setBackgroundColor(0x33FFFFFF)
         }
         column.addView(portInput, rowParams(top = dp(12), width = dp(300), height = dp(46)))
@@ -94,6 +107,15 @@ class MainActivity : Activity() {
                 connect("$proto://$host:$port")
             }
         }, rowParams(top = dp(8), height = dp(48), width = dp(300)))
+
+        // 上次连接过：提供一键直连
+        if (saved != null && prefillHost.isNotEmpty()) {
+            column.addView(Button(this).apply {
+                text = "连接上次: $prefillHost:$prefillPort"
+                setTextColor(COL_TEXT); setBackgroundColor(0x33FFFFFF)
+                setOnClickListener { connect(saved.trim()) }
+            }, rowParams(top = dp(8), height = dp(44), width = dp(300)))
+        }
 
         statusView = TextView(this).apply {
             textSize = 13f; setTextColor(COL_MUTED); gravity = Gravity.CENTER
@@ -124,6 +146,8 @@ class MainActivity : Activity() {
                     prefs.edit().putString("url", baseUrl).apply()
                     app.clientStarted = true
                     status("已连接，打开会话…")
+                    // 启动事件流（两个 downlink WebSocket + 断线重连）
+                    Thread { dsh.start() }.start()
                     val i = Intent(this, ConversationActivity::class.java)
                     startActivity(i)
                 } else {
