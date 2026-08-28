@@ -140,7 +140,7 @@ class SshTunnel(
     override fun close() {
         started.set(false)
         reconnectThread?.interrupt()
-        try { forwarder?.stop() } catch (_: Exception) {}
+        try { forwarder?.close() } catch (_: Exception) {}
         try { ssh?.disconnect() } catch (_: Exception) {}
         forwarder = null
         ssh = null
