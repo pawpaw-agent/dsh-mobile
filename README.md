@@ -43,10 +43,15 @@
 - **工具审批** — `approval/requested` 弹出「允许一次 / 拒绝」，`/api/respond` 回 `client-response`
 - **用户提问** — `question/requested` 接入 `respondQuestion`
 - **任务/进度** — `session/jobs` 渲染 TaskView 列表
+- **队列状态** — `session/queue` 实时展示待发送/插话队列
+- **会话管理** — 搜索、重命名、Fork、Agent Preset 选择
+- **子代理** — 查看子代理列表、历史，继续提示、打断
+- **工作区管理** — 工作区列表、新建、重命名、删除，打开工作区内会话
+- **配置管理** — 模型列表、模型提供方、设置命名空间、凭据、Agent Preset 的查看/编辑
 - **明文 HTTP 支持** — `usesCleartextTraffic="true"`，局域网直连（原生客户端无需浏览器 polyfill/窄屏适配）
 - **`DshClient` 断线重连** — 就绪握手失败按指数退避重连（base 500ms、倍率 2、上限 10s + 抖动）
 
-> 协议层（`com.dshmobile.protocol`）还实现了 `workspace.*`、`subagent.*`、`llm.*`、`settings.*`、`credentials.*`、`goal.*` 等方法目录，供后续 UI 接入。
+> 协议层（`com.dshmobile.protocol`）还实现了 `workspace.*`、`subagent.*`、`llm.*`、`settings.*`、`credentials.*`、`goal.*` 等方法目录；其中原生 UI 已接入工作区、子代理、配置/模型/凭据/Agent Preset 等主要能力。
 
 ---
 
@@ -128,7 +133,10 @@ dsh-mobile/
 │   │   │   ├── java/com/dshmobile/
 │   │   │   │   ├── app/
 │   │   │   │   │   ├── MainActivity.kt          # 连接屏（host:port → DshClient 就绪握手）
-│   │   │   │   │   ├── ConversationActivity.kt  # 原生会话/对话/流式/审批/模型选择
+│   │   │   │   │   ├── ConversationActivity.kt  # 原生会话/对话/流式/审批/模型选择/子代理
+│   │   │   │   │   ├── WorkspaceActivity.kt     # 工作区管理
+│   │   │   │   │   ├── ConfigActivity.kt        # 配置/模型/凭据/Preset 管理
+│   │   │   │   │   ├── AgentMonitorService.kt   # 后台 Agent 完成通知服务
 │   │   │   │   │   └── DshApp.kt                # Application 单例：持有进程级 DshClient
 │   │   │   │   └── protocol/
 │   │   │   │       ├── Rpc.kt                   # 四象限 RPC envelope + 错误体

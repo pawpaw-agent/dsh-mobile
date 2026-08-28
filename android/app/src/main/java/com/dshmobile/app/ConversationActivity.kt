@@ -2,6 +2,7 @@ package com.dshmobile.app
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
@@ -44,6 +45,7 @@ class ConversationActivity : Activity() {
     private lateinit var sendBtn: Button
     private var cancelBtn: Button? = null
     private var jobsView: TextView? = null
+    private var queueView: TextView? = null
 
     // 流式累积
     private var streamingText = StringBuilder()
@@ -83,29 +85,37 @@ class ConversationActivity : Activity() {
             sessionId = it.getString(STATE_SESSION)
             running = it.getBoolean(STATE_RUNNING, false)
         }
+        // 从工作区/其它入口显式指定要打开的会话（覆盖状态恢复，便于跳转）
+        intent?.getStringExtra("sessionId")?.let { sessionId = it }
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(COL_BG)
         }
 
-        // 顶栏：标题 + 会话 + 新建 + 模型 + 工作区
+        // 顶栏：标题 + 会话 + 新建 + 模型 + 工作区 + 更多
         val titleRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         titleView = TextView(this).apply {
             text = "会话"; textSize = 18f; setTextColor(COL_TEXT)
             maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
         }
-        titleRow.addView(titleView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        titleRow.addView(titleView, LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT))
         fun barBtn(label: String, onClick: () -> Unit) = Button(this).apply {
             text = label; setTextColor(COL_TEXT); setBackgroundColor(0x33FFFFFF)
-            setPadding(dp(6), 0, dp(6), 0)
+            setPadding(dp(4), 0, dp(4), 0)
             setOnClickListener { onClick() }
         }
-        titleRow.addView(barBtn("会话") { pickSession() }, LinearLayout.LayoutParams(dp(64), dp(40)))
-        titleRow.addView(barBtn("新建") { newSession() }, LinearLayout.LayoutParams(dp(64), dp(40)))
-        titleRow.addView(barBtn("模型") { chooseModel() }, LinearLayout.LayoutParams(dp(64), dp(40)))
-        titleRow.addView(barBtn("工作区") { browseWorkspaces() }, LinearLayout.LayoutParams(dp(76), dp(40)))
-        root.addView(titleRow)
+        titleRow.addView(barBtn("会话") { pickSession() }, LinearLayout.LayoutParams(dp(56), dp(40)))
+        titleRow.addView(barBtn("新建") { newSession() }, LinearLayout.LayoutParams(dp(56), dp(40)))
+        titleRow.addView(barBtn("模型") { chooseModel() }, LinearLayout.LayoutParams(dp(56), dp(40)))
+        titleRow.addView(barBtn("工作区") {
+            startActivity(Intent(this@ConversationActivity, WorkspaceActivity::class.java))
+        }, LinearLayout.LayoutParams(dp(68), dp(40)))
+        titleRow.addView(barBtn("更多") { showMoreMenu() }, LinearLayout.LayoutParams(dp(56), dp(40)))
+        root.addView(android.widget.HorizontalScrollView(this).apply {
+            addView(titleRow)
+            isHorizontalScrollBarEnabled = false
+        })
 
         // transcript
         transcript = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -160,6 +170,14 @@ class ConversationActivity : Activity() {
         } else {
             // 首次进入：打开最近会话
             Thread { refreshSessionsAndOpen() }.start()
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        intent?.getStringExtra("sessionId")?.let {
+            sessionId = it
+            openSession(it)
         }
     }
 
@@ -229,6 +247,7 @@ class ConversationActivity : Activity() {
             titleView.text = "会话 ${sid.take(6)}"
             transcript.removeAllViews()
             jobsView = null
+            queueView = null
         }
         // 初始 running 态：session.list 缓存里就有，不必等 host/session-status 帧
         running = sessionCache.firstOrNull { it.sessionId == sid }?.running ?: false
@@ -268,6 +287,7 @@ class ConversationActivity : Activity() {
                         if (payload.optString("sessionId") == sessionId) showQuestion(rpcId, payload)
                     }
                     "session/jobs" -> renderJobs(payload.optJSONArray("jobs"))
+                    "session/queue" -> renderQueue(payload.optJSONArray("items"))
                     "stream/error" -> {
                         payload.optJSONObject("error")?.let {
                             appendSystem("⚠ 流错误: ${it.optString("message", "unknown")}")
@@ -528,6 +548,38 @@ class ConversationActivity : Activity() {
         ensureScrollBottom()
     }
 
+    /** 队列状态行：原地更新，不刷屏。 */
+    private fun renderQueue(items: JSONArray?) {
+        items ?: return
+        if (items.length() == 0) {
+            queueView?.let { transcript.removeView(it); queueView = null }
+            return
+        }
+        val sb = StringBuilder()
+        for (i in 0 until items.length()) {
+            val it = items.optJSONObject(i) ?: continue
+            val msg = it.optJSONObject("message")
+            val text = msg?.optJSONArray("content")?.let { c ->
+                val b = StringBuilder()
+                for (j in 0 until c.length()) {
+                    val part = c.optJSONObject(j) ?: continue
+                    if (part.optString("type") == "text") b.append(part.optString("text"))
+                }
+                b.toString()
+            } ?: ""
+            sb.append("${it.optString("placement", "queued")} · ${text.take(60)}\n")
+        }
+        if (queueView == null) {
+            queueView = TextView(this).apply {
+                setTextColor(0xFFD9A05B.toInt()); textSize = 12f
+                setPadding(dp(16), dp(4), dp(16), dp(4))
+                transcript.addView(this)
+            }
+        }
+        queueView?.text = sb.toString().trimEnd()
+        ensureScrollBottom()
+    }
+
     /** jobs 状态行：原地更新，不刷屏。 */
     private fun renderJobs(jobs: JSONArray?) {
         jobs ?: return
@@ -621,22 +673,255 @@ class ConversationActivity : Activity() {
         }.start()
     }
 
-    private fun browseWorkspaces() {
+    private fun choosePreset() {
+        val sid = sessionId ?: run { toast("先选择会话"); return }
         Thread {
-            val r = client.workspaceList()
+            val r = client.agentPresetList()
             ui.post {
-                if (r !is Rpc.Result.Ok) { toast("获取工作区失败: ${errText(r)}"); return@post }
-                val list = Models.WorkspaceList.fromJson(r.value)
-                if (list.items.isEmpty()) { toast("暂无工作区"); return@post }
+                if (r !is Rpc.Result.Ok) { toast("获取 Preset 失败: ${errText(r)}"); return@post }
+                val presets = r.value?.optJSONArray("presets") ?: JSONArray()
+                if (presets.length() == 0) { toast("无 Agent Preset"); return@post }
+                val labels = ArrayList<String>()
+                val ids = ArrayList<String>()
+                for (i in 0 until presets.length()) {
+                    val p = presets.optJSONObject(i) ?: continue
+                    labels.add("${p.optString("name", p.optString("id"))} (${p.optString("trust", "?")})")
+                    ids.add(p.optString("id"))
+                }
                 AlertDialog.Builder(this)
-                    .setTitle("选择工作区")
-                    .setItems(list.items.map { "${it.title}  (${it.path})" }.toTypedArray()) { _, which ->
-                        val sid = list.items[which].sessionIds.firstOrNull()
-                        if (sid != null) openSession(sid) else toast("该工作区无会话")
+                    .setTitle("选择 Agent Preset")
+                    .setItems(labels.toTypedArray()) { _, which ->
+                        Thread { client.agentPresetSelect(sid, ids[which]) }.start()
+                        toast("已选择 Preset")
                     }
                     .show()
             }
         }.start()
+    }
+
+    // ── 更多菜单：搜索 / 重命名 / fork / 子代理 / 配置 ────────
+    private fun showMoreMenu() {
+        val options = arrayOf(
+            "搜索会话", "重命名当前会话", "Fork 当前会话",
+            "子代理", "Agent Preset", "模型/配置管理", "工作区管理"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("更多")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> searchSessions()
+                    1 -> renameSession()
+                    2 -> forkSession()
+                    3 -> showSubagents()
+                    4 -> choosePreset()
+                    5 -> startActivity(Intent(this@ConversationActivity, ConfigActivity::class.java))
+                    6 -> startActivity(Intent(this@ConversationActivity, WorkspaceActivity::class.java))
+                }
+            }
+            .show()
+    }
+
+    private fun searchSessions() {
+        val et = EditText(this).apply {
+            hint = "搜索会话内容…"
+            setTextColor(COL_TEXT); setHintTextColor(COL_MUTED); setBackgroundColor(0x33FFFFFF)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("搜索会话")
+            .setView(et)
+            .setPositiveButton("搜索") { _, _ ->
+                val q = et.text.toString().trim()
+                if (q.isEmpty()) { toast("输入搜索词"); return@setPositiveButton }
+                Thread {
+                    val r = client.sessionSearch(q)
+                    ui.post {
+                        if (r !is Rpc.Result.Ok) { toast("搜索失败: ${errText(r)}"); return@post }
+                        val items = r.value?.optJSONArray("items") ?: JSONArray()
+                        if (items.length() == 0) { toast("无结果"); return@post }
+                        val labels = ArrayList<String>()
+                        val sids = ArrayList<String>()
+                        for (i in 0 until items.length()) {
+                            val it = items.optJSONObject(i) ?: continue
+                            labels.add(it.optString("snippet", "").take(120))
+                            sids.add(it.optString("sessionId"))
+                        }
+                        AlertDialog.Builder(this)
+                            .setTitle("搜索结果")
+                            .setItems(labels.toTypedArray()) { _, which ->
+                                openSession(sids[which])
+                            }
+                            .show()
+                    }
+                }.start()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun renameSession() {
+        val sid = sessionId ?: run { toast("先选择会话"); return }
+        val current = sessionCache.firstOrNull { it.sessionId == sid }?.title
+        val et = EditText(this).apply {
+            setText(current ?: "")
+            hint = "会话标题"
+            setTextColor(COL_TEXT); setHintTextColor(COL_MUTED); setBackgroundColor(0x33FFFFFF)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("重命名会话")
+            .setView(et)
+            .setPositiveButton("保存") { _, _ ->
+                val title = et.text.toString().trim()
+                if (title.isEmpty()) { toast("标题不能为空"); return@setPositiveButton }
+                Thread {
+                    val r = client.sessionRename(sid, title)
+                    ui.post {
+                        if (r is Rpc.Result.Ok) {
+                            sessionCache = sessionCache.map {
+                                if (it.sessionId == sid) it.copy(title = title) else it
+                            }
+                            toast("已重命名")
+                        } else toast("重命名失败: ${errText(r)}")
+                    }
+                }.start()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun forkSession() {
+        val sid = sessionId ?: run { toast("先选择会话"); return }
+        Thread {
+            val r = client.sessionFork(sid)
+            ui.post {
+                if (r is Rpc.Result.Ok) {
+                    val nsid = r.value?.optString("sessionId") ?: ""
+                    if (nsid.isNotEmpty()) {
+                        toast("已 fork，打开新会话")
+                        openSession(nsid)
+                    } else toast("fork 返回为空")
+                } else toast("fork 失败: ${errText(r)}")
+            }
+        }.start()
+    }
+
+    // ── 子代理 ────────────────────────────────────────────────
+    private fun showSubagents() {
+        val sid = sessionId ?: run { toast("先选择会话"); return }
+        Thread {
+            val r = client.subagentList(sid)
+            ui.post {
+                if (r !is Rpc.Result.Ok) { toast("获取子代理失败: ${errText(r)}"); return@post }
+                val entries = r.value?.optJSONArray("entries") ?: JSONArray()
+                if (entries.length() == 0) { toast("暂无子代理"); return@post }
+                val labels = ArrayList<String>()
+                val ids = ArrayList<String>()
+                val modes = ArrayList<String>()
+                for (i in 0 until entries.length()) {
+                    val e = entries.optJSONObject(i) ?: continue
+                    val kind = e.optString("kind")
+                    val id = e.optString("id")
+                    if (kind != "child") {
+                        labels.add("⚠ ${id} (${e.optString("reason", "diagnostic")})")
+                        ids.add(id); modes.add("")
+                        continue
+                    }
+                    val label = e.optString("label", id)
+                    val activity = e.optString("activity", "inactive")
+                    val mode = e.optString("mode", "one-shot")
+                    labels.add("${if (activity == "running") "●" else "○"} $label ($mode)")
+                    ids.add(id); modes.add(mode)
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("子代理")
+                    .setItems(labels.toTypedArray()) { _, which ->
+                        if (modes[which].isNotEmpty()) subagentActions(sid, ids[which], modes[which])
+                    }
+                    .show()
+            }
+        }.start()
+    }
+
+    private fun subagentActions(parentSid: String, childSid: String, mode: String) {
+        val options = arrayOf("查看历史", "继续/提示", "打断")
+        AlertDialog.Builder(this)
+            .setTitle("子代理 ${childSid.take(10)}")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> showSubagentHistory(parentSid, childSid, mode)
+                    1 -> promptSubagent(parentSid, childSid, mode)
+                    2 -> Thread { client.subagentInterrupt(parentSid, childSid, mode) }.start()
+                }
+            }
+            .show()
+    }
+
+    private fun showSubagentHistory(parentSid: String, childSid: String, mode: String) {
+        Thread {
+            val r = client.subagentHistory(parentSid, childSid, mode, maxMessages = 40)
+            ui.post {
+                if (r !is Rpc.Result.Ok) { toast("获取历史失败: ${errText(r)}"); return@post }
+                val events = r.value?.optJSONArray("events") ?: JSONArray()
+                val sb = StringBuilder()
+                for (i in 0 until events.length()) {
+                    val item = events.optJSONObject(i) ?: continue
+                    val ev = item.optJSONObject("event") ?: continue
+                    val type = ev.optString("type")
+                    val data = ev.optJSONObject("data")
+                    val text = when (type) {
+                        "user/message", "assistant/message" -> {
+                            val content = data?.optJSONArray("content")
+                            val b = StringBuilder()
+                            if (content != null) for (j in 0 until content.length()) {
+                                val c = content.optJSONObject(j) ?: continue
+                                if (c.optString("type") == "text") b.append(c.optString("text"))
+                            }
+                            b.toString()
+                        }
+                        "tool/call" -> "🔧 ${data?.optString("name") ?: ""} ${firstArgLine(data?.optString("arguments") ?: "")}"
+                        "tool/result" -> "   ↳ ${extractResultText(data).take(120)}"
+                        else -> null
+                    }
+                    if (!text.isNullOrBlank()) {
+                        sb.append(if (type.startsWith("user")) "👤 " else "🤖 ").append(text).append("\n\n")
+                    }
+                }
+                if (sb.isEmpty()) { toast("无历史消息"); return@post }
+                val tv = TextView(this).apply {
+                    text = sb.toString().trim()
+                    textSize = 13f; setTextColor(COL_TEXT)
+                    setPadding(dp(12), dp(8), dp(12), dp(8))
+                }
+                val scroll = ScrollView(this).apply { addView(tv) }
+                AlertDialog.Builder(this)
+                    .setTitle("子代理历史 ${childSid.take(10)}")
+                    .setView(scroll)
+                    .setPositiveButton("关闭", null)
+                    .show()
+            }
+        }.start()
+    }
+
+    private fun promptSubagent(parentSid: String, childSid: String, mode: String) {
+        val et = EditText(this).apply {
+            hint = "向子代理发送消息…"
+            setTextColor(COL_TEXT); setHintTextColor(COL_MUTED); setBackgroundColor(0x33FFFFFF)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("继续子代理")
+            .setView(et)
+            .setPositiveButton("发送") { _, _ ->
+                val text = et.text.toString().trim()
+                if (text.isEmpty()) { toast("消息不能为空"); return@setPositiveButton }
+                val content = JSONArray().put(JSONObject().put("type", "text").put("text", text))
+                Thread {
+                    val r = client.subagentPrompt(parentSid, childSid, mode, content)
+                    ui.post {
+                        if (r is Rpc.Result.Ok) toast("已发送到子代理") else toast("发送失败: ${errText(r)}")
+                    }
+                }.start()
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun errText(r: Rpc.Result) = (r as? Rpc.Result.Err)?.error?.display ?: "未知错误"

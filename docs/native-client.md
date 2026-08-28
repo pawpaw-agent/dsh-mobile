@@ -18,7 +18,10 @@ com.dshmobile/
 ├── app/
 │   ├── DshApp.kt              # Application 单例：持有进程级 DshClient
 │   ├── MainActivity.kt        # 连接屏（host:port/protocol → create+start DshClient → 就绪握手 → 会话页）
-│   └── ConversationActivity.kt # 会话列表 + 打开会话 + 发送 prompt + 实时流式 + 审批 + 模型选择
+│   ├── ConversationActivity.kt # 会话列表 + 打开会话 + 发送 prompt + 实时流式 + 审批 + 模型选择 + 子代理
+│   ├── WorkspaceActivity.kt    # 工作区列表/新建/重命名/删除/打开会话
+│   ├── ConfigActivity.kt       # 模型/提供方/设置/凭据/Agent Preset 管理
+│   └── AgentMonitorService.kt  # 后台 Agent 完成通知
 └── protocol/
     ├── Rpc.kt                 # 四象限 RPC envelope + 判别错误体 + 解析/构造
     ├── DshClient.kt           # HTTP POST /api unary + 双 WebSocket downlink + 就绪握手/重连 + 方法目录 + respond
@@ -69,8 +72,15 @@ com.dshmobile/
 | 工具审批 | approval/requested → respondApproval | ✅ |
 | 用户提问 | question/requested → respondQuestion | ✅ |
 | 任务/进度 | session/jobs → renderJobs | ✅ |
-| 工作区浏览 | workspace.list | 已接入协议层，UI 待补 |
-| 全局状态 | /api/events.host | 已接入协议层，UI 待补 |
+| 队列状态 | session/queue → renderQueue | ✅ |
+| 会话搜索 | session.search | ✅ |
+| 会话重命名 / fork | session.rename / session.fork | ✅ |
+| Agent Preset 选择 | agentPreset.list / agentPreset.select | ✅ |
+| 工作区管理 | workspace.list/create/rename/delete + host.* | ✅ |
+| 子代理 | subagent.list/history/prompt/interrupt | ✅ |
+| 模型 / 提供方 | llm.models / llm.providers | ✅ |
+| 设置 / 凭据 | settings.* / credentials.* | ✅（需 SSH 回环） |
+| 全局状态 | /api/events.host | 部分：session-status / agent-error |
 
 ## 说明
 

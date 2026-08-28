@@ -256,12 +256,134 @@ class DshClient(baseUrl: String) {
 
     fun workspaceList(): Rpc.Result = callUnary("workspace.list", JSONObject())
     fun workspaceCreate(path: String): Rpc.Result = callUnary("workspace.create", JSONObject().put("path", path))
+    fun workspaceRename(workspaceId: String, title: String): Rpc.Result =
+        callUnary("workspace.rename", JSONObject().put("workspaceId", workspaceId).put("title", title))
+    fun workspaceDelete(workspaceId: String): Rpc.Result =
+        callUnary("workspace.delete", JSONObject().put("workspaceId", workspaceId))
+    fun workspaceInsertBefore(workspaceId: String, beforeWorkspaceId: String? = null): Rpc.Result {
+        val p = JSONObject().put("workspaceId", workspaceId)
+        beforeWorkspaceId?.let { p.put("beforeWorkspaceId", it) }
+        return callUnary("workspace.insertBefore", p)
+    }
+    fun workspaceInsertSessionBefore(workspaceId: String, sessionId: String, beforeSessionId: String? = null): Rpc.Result {
+        val p = JSONObject().put("workspaceId", workspaceId).put("sessionId", sessionId)
+        beforeSessionId?.let { p.put("beforeSessionId", it) }
+        return callUnary("workspace.insertSessionBefore", p)
+    }
+    fun workspaceArchiveSession(sessionId: String): Rpc.Result =
+        callUnary("workspace.archiveSession", JSONObject().put("sessionId", sessionId))
+
+    fun hostListDirectory(path: String): Rpc.Result =
+        callUnary("host.listDirectory", JSONObject().put("path", path))
+    fun hostCreateDirectory(path: String, name: String): Rpc.Result =
+        callUnary("host.createDirectory", JSONObject().put("path", path).put("name", name))
+    fun hostPickDirectory(path: String? = null): Rpc.Result {
+        val p = JSONObject()
+        path?.let { p.put("path", it) }
+        return callUnary("host.pickDirectory", p)
+    }
 
     fun subagentList(parentSessionId: String): Rpc.Result =
         callUnary("subagent.list", JSONObject().put("parentSessionId", parentSessionId))
+    fun subagentHistory(parentSessionId: String, childSessionId: String, mode: String, beforeSeq: Long? = null, maxMessages: Int? = null): Rpc.Result {
+        val p = JSONObject()
+            .put("parentSessionId", parentSessionId)
+            .put("childSessionId", childSessionId)
+            .put("mode", mode)
+        beforeSeq?.let { p.put("beforeSeq", it) }
+        maxMessages?.let { p.put("maxMessages", it) }
+        return callUnary("subagent.history", p)
+    }
+    fun subagentPrompt(parentSessionId: String, childSessionId: String, mode: String, content: JSONArray, clientTimeZone: String? = null): Rpc.Result {
+        val p = JSONObject()
+            .put("parentSessionId", parentSessionId)
+            .put("childSessionId", childSessionId)
+            .put("mode", mode)
+            .put("content", content)
+        clientTimeZone?.let { p.put("clientTimeZone", it) }
+        return callUnary("subagent.prompt", p)
+    }
+    fun subagentInterrupt(parentSessionId: String, childSessionId: String, mode: String): Rpc.Result {
+        val p = JSONObject()
+            .put("parentSessionId", parentSessionId)
+            .put("childSessionId", childSessionId)
+            .put("mode", mode)
+        return callUnary("subagent.interrupt", p)
+    }
+
+    fun skillList(sessionId: String): Rpc.Result =
+        callUnary("skill.list", JSONObject().put("sessionId", sessionId))
+
+    fun agentPresetList(): Rpc.Result = callUnary("agentPreset.list", JSONObject())
+    fun agentPresetSelect(sessionId: String, agentPreset: String): Rpc.Result =
+        callUnary("agentPreset.select", JSONObject().put("sessionId", sessionId).put("agentPreset", agentPreset))
+    fun agentPresetRead(agentPreset: String): Rpc.Result =
+        callUnary("agentPreset.read", JSONObject().put("agentPreset", agentPreset))
+    fun agentPresetCopy(from: String, agentPreset: String, name: String? = null): Rpc.Result {
+        val p = JSONObject().put("from", from).put("agentPreset", agentPreset)
+        name?.let { p.put("name", it) }
+        return callUnary("agentPreset.copy", p)
+    }
+    fun agentPresetRemove(agentPreset: String): Rpc.Result =
+        callUnary("agentPreset.remove", JSONObject().put("agentPreset", agentPreset))
+    fun agentPresetOpenDocument(agentPreset: String): Rpc.Result =
+        callUnary("agentPreset.openDocument", JSONObject().put("agentPreset", agentPreset))
 
     fun llmModels(): Rpc.Result = callUnary("llm.models", JSONObject())
     fun llmProviders(): Rpc.Result = callUnary("llm.providers", JSONObject())
+    fun llmDiscoverModels(settingsNs: String, provider: String? = null, baseURL: String? = null, api: String? = null, apiKey: String? = null): Rpc.Result {
+        val p = JSONObject().put("settingsNs", settingsNs)
+        provider?.let { p.put("provider", it) }
+        baseURL?.let { p.put("baseURL", it) }
+        api?.let { p.put("api", it) }
+        apiKey?.let { p.put("apiKey", it) }
+        return callUnary("llm.discoverModels", p)
+    }
+
+    fun settingsDescribe(): Rpc.Result = callUnary("settings.describe", JSONObject())
+    fun settingsOpenDocument(): Rpc.Result = callUnary("settings.openDocument", JSONObject())
+    fun settingsUpdate(ns: String, patch: JSONObject, expectedRevision: String? = null): Rpc.Result {
+        val p = JSONObject().put("ns", ns).put("patch", patch)
+        expectedRevision?.let { p.put("expectedRevision", it) }
+        return callUnary("settings.update", p)
+    }
+    fun settingsReplace(ns: String, section: JSONObject, expectedRevision: String? = null): Rpc.Result {
+        val p = JSONObject().put("ns", ns).put("section", section)
+        expectedRevision?.let { p.put("expectedRevision", it) }
+        return callUnary("settings.replace", p)
+    }
+    fun settingsMutate(ns: String, ops: JSONArray, expectedRevision: String? = null): Rpc.Result {
+        val p = JSONObject().put("ns", ns).put("ops", ops)
+        expectedRevision?.let { p.put("expectedRevision", it) }
+        return callUnary("settings.mutate", p)
+    }
+
+    fun credentialsDescribe(refs: JSONArray): Rpc.Result =
+        callUnary("credentials.describe", JSONObject().put("refs", refs))
+    fun credentialsSet(ref: String, value: String): Rpc.Result =
+        callUnary("credentials.set", JSONObject().put("ref", ref).put("value", value))
+    fun credentialsUnset(ref: String): Rpc.Result =
+        callUnary("credentials.unset", JSONObject().put("ref", ref))
+
+    fun goalCreate(sessionId: String, objective: String, maxGoalRounds: Int? = null): Rpc.Result {
+        val p = JSONObject().put("sessionId", sessionId).put("objective", objective)
+        maxGoalRounds?.let { p.put("maxGoalRounds", it) }
+        return callUnary("goal.create", p)
+    }
+    fun goalEdit(sessionId: String, ref: JSONObject, objective: String? = null, maxGoalRounds: Int? = null): Rpc.Result {
+        val p = JSONObject().put("sessionId", sessionId).put("ref", ref)
+        objective?.let { p.put("objective", it) }
+        maxGoalRounds?.let { p.put("maxGoalRounds", it) }
+        return callUnary("goal.edit", p)
+    }
+    fun goalPause(sessionId: String, ref: JSONObject): Rpc.Result =
+        callUnary("goal.pause", JSONObject().put("sessionId", sessionId).put("ref", ref))
+    fun goalResume(sessionId: String, ref: JSONObject): Rpc.Result =
+        callUnary("goal.resume", JSONObject().put("sessionId", sessionId).put("ref", ref))
+    fun goalComplete(sessionId: String, ref: JSONObject): Rpc.Result =
+        callUnary("goal.complete", JSONObject().put("sessionId", sessionId).put("ref", ref))
+    fun goalClear(sessionId: String, ref: JSONObject): Rpc.Result =
+        callUnary("goal.clear", JSONObject().put("sessionId", sessionId).put("ref", ref))
 
     /** downlink WebSocket 监听：只收不发；解析 server-request 帧并分发（携带 envelope rpcId）。 */
     private inner class Downlink(private val isMux: Boolean) : WebSocketListener() {
