@@ -49,4 +49,6 @@ dependencies {
     implementation("androidx.webkit:webkit:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.hierynomus:sshj:0.38.0")
+    // sshj 把 BC 声明为 runtime-only；Android 上需要完整版 BC 提供 X25519/Ed25519，编译期就要可见
+    implementation("org.bouncycastle:bcprov-jdk18on:1.75")
 }
