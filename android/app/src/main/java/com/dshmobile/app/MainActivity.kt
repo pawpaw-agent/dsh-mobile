@@ -14,6 +14,7 @@ import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.TextView
+import org.json.JSONObject
 import com.dshmobile.protocol.DshClient
 
 /**
@@ -95,16 +96,55 @@ class MainActivity : Activity() {
         }
         column.addView(portInput, rowParams(top = dp(12), width = dp(300), height = dp(46)))
 
+        // ── SSH 隧道模式：经 SSH 本地端口转发访问，服务端视角为回环 → 配置平面全解锁 ──
+        val sshToggle = android.widget.CheckBox(this).apply {
+            text = "SSH 隧道（解锁设置/凭据等本机限制接口）"
+            setTextColor(COL_MUTED)
+        }
+        column.addView(sshToggle, rowParams(top = dp(8), width = dp(300)))
+
+        val savedSsh = prefs.getString("ssh_json", null)?.let {
+            try { JSONObject(it) } catch (_: Exception) { null }
+        }
+        fun sshField(hint: String, key: String, pwd: Boolean = false): EditText = EditText(this).apply {
+            this.hint = hint
+            setTextColor(COL_TEXT); setHintTextColor(COL_DIM); setBackgroundColor(0x33FFFFFF)
+            if (pwd) transformationMethod = android.text.method.PasswordTransformationMethod.getInstance()
+            savedSsh?.optString(key)?.let { if (it.isNotEmpty()) setText(it) }
+        }
+        val sshHostInput = sshField("SSH 主机（电脑 IP / 域名）", "sshHost")
+        val sshPortInput = sshField("SSH 端口", "sshPort").apply { setText(savedSsh?.optString("sshPort", "22") ?: "22") }
+        val sshUserInput = sshField("SSH 用户名", "sshUser")
+        val sshPassInput = sshField("SSH 密码 / 私钥口令", "password", pwd = true)
+        val sshFields = listOf(sshHostInput, sshPortInput, sshUserInput, sshPassInput)
+        sshFields.forEach {
+            it.visibility = View.GONE
+            column.addView(it, rowParams(top = dp(8), width = dp(300), height = dp(44)))
+        }
+        sshToggle.setOnCheckedChangeListener { _, checked ->
+            sshFields.forEach { it.visibility = if (checked) View.VISIBLE else View.GONE }
+        }
+
         column.addView(spacer(dp(24)))
 
         column.addView(Button(this).apply {
             text = "Connect"; setTextColor(COL_TEXT); setBackgroundColor(COL_ACCENT)
             setOnClickListener {
-                val host = hostInput.text.toString().trim()
-                if (host.isBlank()) { status("host 不能为空"); return@setOnClickListener }
-                val port = portInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
-                val proto = if (protocolGroup.checkedRadioButtonId == httpsBtn.id) "https" else "http"
-                connect("$proto://$host:$port")
+                if (sshToggle.isChecked) {
+                    val sh = sshHostInput.text.toString().trim()
+                    val su = sshUserInput.text.toString().trim()
+                    val sp = sshPassInput.text.toString()
+                    val sport = sshPortInput.text.toString().trim().toIntOrNull() ?: 22
+                    val rport = portInput.text.toString().trim().toIntOrNull() ?: 3080
+                    if (sh.isBlank() || su.isBlank()) { status("SSH 主机/用户名不能为空"); return@setOnClickListener }
+                    connectViaSsh(sh, sport, su, rport, sp)
+                } else {
+                    val host = hostInput.text.toString().trim()
+                    if (host.isBlank()) { status("host 不能为空"); return@setOnClickListener }
+                    val port = portInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
+                    val proto = if (protocolGroup.checkedRadioButtonId == httpsBtn.id) "https" else "http"
+                    connect("$proto://$host:$port")
+                }
             }
         }, rowParams(top = dp(8), height = dp(48), width = dp(300)))
 
@@ -133,6 +173,53 @@ class MainActivity : Activity() {
     private fun connect(baseUrl: String) {
         status("连接中… ($baseUrl)")
         val dsh = DshClient(baseUrl)
+        handshakeAndEnter(dsh, baseUrl)
+    }
+
+    /** SSH 隧道模式：先建转发，再对手机本机回环地址握手（服务端视为本机访问）。 */
+    private fun connectViaSsh(sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, password: String) {
+        status("SSH 隧道建立中… ($sshUser@$sshHost)")
+        val app = application as DshApp
+        Thread {
+            val tunnel = SshTunnel(
+                sshHost = sshHost, sshPort = sshPort, sshUser = sshUser,
+                remoteHost = "127.0.0.1", remotePort = remotePort,
+                auth = SshTunnel.Auth.Password(password)
+            )
+            tunnel.onStateChange = { s -> runOnUiThread { status("隧道: $s") } }
+            tunnel.start()
+            val base = tunnel.localBaseUrl
+            runOnUiThread {
+                if (base == null) {
+                    tunnel.close()
+                    status("隧道建立失败（检查 SSH 主机/端口/用户/密码）")
+                    return@runOnUiThread
+                }
+                status("隧道就绪 → $base")
+                persistSshConfig(sshHost, sshPort, sshUser, remotePort, password)
+                val dsh = DshClient(base)
+                app.sshTunnel = tunnel
+                handshakeAndEnter(dsh, base, saveUrl = null)
+            }
+        }.start()
+    }
+
+    /** 持久化 SSH 连接参数（连接成功后调用）。 */
+    private fun persistSshConfig(sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, password: String) {
+        try {
+            val cfg = JSONObject()
+                .put("sshHost", sshHost)
+                .put("sshPort", sshPort)
+                .put("sshUser", sshUser)
+                .put("remoteHost", "127.0.0.1")
+                .put("remotePort", remotePort)
+                .put("authType", "password")
+                .put("password", password)
+            prefs.edit().putString("ssh_json", cfg.toString()).apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun handshakeAndEnter(dsh: DshClient, baseUrl: String, saveUrl: String? = baseUrl) {
         dsh.onStateChange = { s -> runOnUiThread { status("状态: $s") } }
         val app = application as DshApp
         app.client = dsh
@@ -143,7 +230,7 @@ class MainActivity : Activity() {
             val desc = dsh.hostDescribe()
             runOnUiThread {
                 if (desc.isOk) {
-                    prefs.edit().putString("url", baseUrl).apply()
+                    saveUrl?.let { prefs.edit().putString("url", it).apply() }
                     app.clientStarted = true
                     status("已连接，打开会话…")
                     // 启动事件流（两个 downlink WebSocket + 断线重连）

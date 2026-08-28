@@ -18,4 +18,8 @@ class DshApp : Application() {
     /** 连接后建立的客户端是否已启动（start() 幂等）。 */
     @Volatile
     var clientStarted: Boolean = false
+
+    /** SSH 隧道（SSH 模式连接时持有；退出/重连时 close）。 */
+    @Volatile
+    var sshTunnel: com.dshmobile.protocol.SshTunnel? = null
 }
