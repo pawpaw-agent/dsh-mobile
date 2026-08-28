@@ -93,6 +93,7 @@ class ConversationActivity : Activity() {
         val titleRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         titleView = TextView(this).apply {
             text = "会话"; textSize = 18f; setTextColor(COL_TEXT)
+            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
         }
         titleRow.addView(titleView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         fun barBtn(label: String, onClick: () -> Unit) = Button(this).apply {
@@ -198,7 +199,7 @@ class ConversationActivity : Activity() {
     private fun pickSession() {
         if (sessionCache.isEmpty()) { toast("暂无会话"); return }
         val titles = sessionCache.take(15).mapIndexed { i, s ->
-            "${if (s.running) "●" else "○"} ${s.title ?: s.sessionId.take(8)}"
+            "${if (s.running) "●" else "○"} ${s.title ?: s.sessionId.take(6)}"
         }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("选择会话")
@@ -225,7 +226,7 @@ class ConversationActivity : Activity() {
         sessionId = sid
         resetStreaming()
         ui.post {
-            titleView.text = "会话 ${sid.take(8)}"
+            titleView.text = "会话 ${sid.take(6)}"
             transcript.removeAllViews()
             jobsView = null
         }
@@ -422,7 +423,7 @@ class ConversationActivity : Activity() {
     private fun updateRunningUi() {
         sendBtn.text = if (running) "插话" else "发送"
         cancelBtn?.visibility = if (running) ViewGroup.VISIBLE else ViewGroup.GONE
-        titleView.text = "会话 ${(sessionId ?: "").take(8)} ${if (running) "●" else "○"}"
+        titleView.text = "会话 ${(sessionId ?: "").take(6)} ${if (running) "●" else "○"}"
     }
 
     // ── 审批 / 提问 ──────────────────────────────────────────
