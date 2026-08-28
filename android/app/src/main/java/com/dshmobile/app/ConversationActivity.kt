@@ -77,6 +77,11 @@ class ConversationActivity : Activity() {
             setOnClickListener { chooseModel() }
         }
         titleRow.addView(modelBtn, LinearLayout.LayoutParams(dp(72), dp(42)))
+        val wsBtn = Button(this).apply {
+            text = "工作区"; setTextColor(COL_TEXT); setBackgroundColor(0x33FFFFFF)
+            setOnClickListener { browseWorkspaces() }
+        }
+        titleRow.addView(wsBtn, LinearLayout.LayoutParams(dp(88), dp(42)))
         root.addView(titleRow)
 
         sessionListText = TextView(this).apply {
@@ -198,6 +203,32 @@ class ConversationActivity : Activity() {
         }.start()
     }
 
+    /** 工作区浏览：workspace.list → 列出 workspace，点开进入其第一个会话。 */
+    private fun browseWorkspaces() {
+        Thread {
+            val r = client.workspaceList()
+            ui.post {
+                if (r !is Rpc.Result.Ok) { toast("获取工作区失败"); return@post }
+                val list = Models.WorkspaceList.fromJson(r.value)
+                if (list.items.isEmpty()) { toast("暂无工作区"); return@post }
+                val titles = list.items.mapIndexed { i, w -> "${i + 1}. ${w.title}  (${w.path})" }.toTypedArray()
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("选择工作区")
+                    .setItems(titles) { _, which ->
+                        val w = list.items[which]
+                        val sid = w.sessionIds.firstOrNull()
+                        if (sid != null) {
+                            openSession(sid)
+                            toast("打开: ${w.title}")
+                        } else {
+                            toast("该工作区无会话")
+                        }
+                    }
+                    .show()
+            }
+        }.start()
+    }
+
     /** 渲染历史里的 user/assistant 消息。 */
     private fun renderHistoryEvent(ev: JSONObject) {
         val type = ev.optString("type")
@@ -237,6 +268,31 @@ class ConversationActivity : Activity() {
                     }
                     "stream/error" -> { /* 服务端流错误，可显示 */ }
                 }
+            }
+        }
+        client.onHostFrame { _rpcId, payload ->
+            val type = payload.optString("type")
+            ui.post { handleHostFrame(type, payload) }
+        }
+    }
+
+    /** HostFrame 全局状态渲染（protocol §4.2）。 */
+    private fun handleHostFrame(type: String, payload: JSONObject) {
+        when (type) {
+            "host/session-status" -> {
+                val sid = payload.optString("sessionId")
+                val running = payload.optBoolean("running", false)
+                if (sid == sessionId) {
+                    titleView.text = "会话 ${sid.take(8)} ${if (running) "●运行中" else "○空闲"}"
+                }
+            }
+            "host/workspace-changed", "host/workspace-removed",
+            "host/workspace-order-changed", "host/archived-sessions-changed" -> {
+                // 工作区/归档集合变化：可刷新工作区列表提示（保持轻量）
+            }
+            "host/agent-error" -> {
+                val msg = payload.optString("message")
+                if (msg.isNotEmpty()) appendSystemBubble("⚠ ${msg}")
             }
         }
     }
