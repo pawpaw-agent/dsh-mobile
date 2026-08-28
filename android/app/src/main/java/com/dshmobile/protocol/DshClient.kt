@@ -106,7 +106,7 @@ class DshClient(baseUrl: String, timeoutSeconds: Long = 30) {
             if (!running.get()) return
             onStateChange?.invoke("reconnecting")
             val n = attempt.incrementAndGet()
-            var cap = 500L * Math.pow(2.0, Math.max(0, n - 1)).toLong()
+            var cap = 500L * Math.pow(2.0, Math.max(0, n - 1).toDouble()).toLong()
             cap = Math.min(10_000L, cap)
             val delay = cap / 2 + (Math.random() * cap / 2).toLong()
             Thread.sleep(delay)
@@ -116,9 +116,10 @@ class DshClient(baseUrl: String, timeoutSeconds: Long = 30) {
 
     /** 生成 ws:// 或 wss:// 的 downlink URL。 */
     private fun eventUrl(path: String): String {
-        val scheme = if (base.scheme() == "https") "wss" else "ws"
-        val host = base.host()
-        val port = if (base.port() == 80 || base.port() == 443) "" else ":${base.port()}"
+        val scheme = if (base.scheme == "https") "wss" else "ws"
+        val host = base.host
+        val defaultPort = if (base.scheme == "https") 443 else 80
+        val port = if (base.port == defaultPort) "" else ":${base.port}"
         return "$scheme://$host$port$path"
     }
 
