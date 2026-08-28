@@ -160,12 +160,26 @@ class SshTunnel(
      */
     private fun createClient(): SSHClient {
         try {
-            java.security.Security.removeProvider("BC")
-            java.security.Security.insertProviderAt(
-                org.bouncycastle.jce.provider.BouncyCastleProvider(), 1
-            )
+            // Android 内置精简 BC 无 X25519/Ed25519；换成完整版 bcprov（位置 1 优先）
+            val bc = org.bouncycastle.jce.provider.BouncyCastleProvider()
+            if (java.security.Security.getProvider(bc.name) == null) {
+                java.security.Security.insertProviderAt(bc, 1)
+            }
         } catch (t: Throwable) {
-            Log.w(TAG, "sshj BC provider swap failed: ${t.message}")
+            Log.w(TAG, "sshj BC provider registration failed, falling back: ${t.message}")
+        }
+        // 验证 X25519 是否真的可用；不可用则降级注册（removeProvider 只在确认新 BC 可用后才执行）
+        val bcProv = java.security.Security.getProvider("BC")
+        val x25519Ok = try {
+            java.security.KeyPairGenerator.getInstance("X25519", bcProv)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "sshj X25519 unavailable on provider '$bcProv': ${t.message}")
+            false
+        }
+        if (!x25519Ok && bcProv != null) {
+            // 退化：把所有曲线算法交给平台默认（旧 sshj 行为），不再硬性 remove
+            Log.w(TAG, "sshj falling back to platform security providers")
         }
         return SSHClient()
     }
