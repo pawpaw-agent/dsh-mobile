@@ -154,8 +154,11 @@ class MainActivity : Activity() {
         val currentUrl = webView?.url
         val baseMatch = savedUrl != null && currentUrl != null &&
             currentUrl.trimEnd('/').startsWith(savedUrl.trimEnd('/'))
-        val sshSaved = prefs.getBoolean(PREF_SSH_ENABLED, false) &&
-            prefs.getString("ssh_json", null) != null
+        // 向后兼容：旧版本没有 ssh_enabled 标志，但保存的 URL 是隧道回环地址、
+        // 且存在完整 SSH 配置时也自动恢复隧道（否则会加载一个早已失效的旧端口）。
+        val savedIsSshLoopback = savedUrl?.startsWith("http://127.0.0.1:") == true
+        val sshSaved = prefs.getString("ssh_json", null) != null &&
+            (prefs.getBoolean(PREF_SSH_ENABLED, false) || savedIsSshLoopback)
         if (savedMode == "web" && savedUrl != null && !baseMatch) {
             if (sshSaved) {
                 autoConnectSsh(savedUrl)
