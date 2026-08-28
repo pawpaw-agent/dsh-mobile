@@ -80,7 +80,7 @@ com.dshmobile/
 | 子代理 | subagent.list/history/prompt/interrupt | ✅ |
 | 模型 / 提供方 | llm.models / llm.providers | ✅ |
 | 设置 / 凭据 | settings.* / credentials.* | ✅（需 SSH 回环） |
-| 全局状态 | /api/events.host | 部分：session-status / agent-error |
+| 全局状态 | /api/events.host | 部分：session-status/session-added/session-removed/agent-error，自动刷新会话缓存 |
 
 ## 说明
 
