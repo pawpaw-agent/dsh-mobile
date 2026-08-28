@@ -29,7 +29,7 @@ import org.json.JSONObject
  *  - approval/requested → 允许一次/拒绝（respondApproval）
  *  - question/requested → 选项对话框（respondQuestion，value={sessionId,answer:{answers:[…]}}）
  *  - session/jobs → 状态行原地更新（不刷屏）
- *  - host/* → 全局状态（运行指示、agent-error）
+ *  - host 帧族（session-status / agent-error 等）→ 全局状态（运行指示、错误提示）
  */
 class ConversationActivity : Activity() {
     private val ui = Handler(Looper.getMainLooper())
