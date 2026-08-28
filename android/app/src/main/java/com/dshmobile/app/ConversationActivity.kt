@@ -64,10 +64,20 @@ class ConversationActivity : Activity() {
         }
 
         // 顶栏：标题 + 会话列表快捷区
-        titleView = TextView(this).apply {
-            text = "会话"; textSize = 20f; setTextColor(COL_TEXT); setPadding(dp(16), dp(16), dp(16), dp(8))
+        val titleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(16), dp(16), dp(16), dp(8))
         }
-        root.addView(titleView)
+        titleView = TextView(this).apply {
+            text = "会话"; textSize = 20f; setTextColor(COL_TEXT)
+        }
+        titleRow.addView(titleView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val modelBtn = Button(this).apply {
+            text = "模型"; setTextColor(COL_TEXT); setBackgroundColor(0x33FFFFFF)
+            setOnClickListener { chooseModel() }
+        }
+        titleRow.addView(modelBtn, LinearLayout.LayoutParams(dp(72), dp(42)))
+        root.addView(titleRow)
 
         sessionListText = TextView(this).apply {
             textSize = 13f; setTextColor(COL_MUTED); setPadding(dp(16), 0, dp(16), dp(8))
@@ -157,6 +167,33 @@ class ConversationActivity : Activity() {
                         }
                     }
                 }
+            }
+        }.start()
+    }
+
+    /** 模型选择：拉取 session.models，展示 provider group / model 列表并选中。 */
+    private fun chooseModel() {
+        val sid = sessionId ?: run { toast("先打开一个会话"); return }
+        Thread {
+            val r = client.sessionModels(sid)
+            ui.post {
+                if (r !is Rpc.Result.Ok) { toast("获取模型失败"); return@post }
+                val m = Models.SessionModels.fromJson(r.value)
+                // 扁平化为 {provider, modelId, name} 列表
+                val flat = ArrayList<Pair<String, Models.CatalogModel>>()
+                for (g in m.groups) for (mdl in g.models) flat.add(g.id to mdl)
+                if (flat.isEmpty()) { toast("无可用模型"); return@post }
+
+                val names = flat.map { it.second.name }
+                val titles = names.toTypedArray()
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("选择模型")
+                    .setItems(titles) { _, which ->
+                        val p = flat[which]
+                        Thread { client.sessionSelectModel(sid, p.first, p.second.id) }.start()
+                        toast("已选: ${p.second.name}")
+                    }
+                    .show()
             }
         }.start()
     }
@@ -351,4 +388,8 @@ class ConversationActivity : Activity() {
     }
 
     private fun dp(n: Int) = (n * resources.displayMetrics.density + 0.5f).toInt()
+
+    private fun toast(msg: String) {
+        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+    }
 }
