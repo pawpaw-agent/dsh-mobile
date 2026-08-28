@@ -34,7 +34,7 @@
 - **连接屏** — 输入 host:port + 选择 http/https 协议即可连接 dsh web，默认端口 `3080`；连接前做一次 `host.describe` 就绪握手
 - **会话列表与打开** — `session.list` / `session.history`，展示最近会话并可进入
 - **对话发送** — `session.prompt`（queue / steer），等待 agent 响应
-- **实时流式渲染** — `/api/events.mux` 的 `session/event` → `assistant/chunk` 文本/推理增量滚动追加
+- **实时流式渲染** — `/api/events.mux` 的 `session/event` → `assistant/chunk`，按 content-block index 分块渲染（text 与 tool-call 分属不同 block，`block-end` 以服务端完整文本落定）
 - **模型选择** — 顶栏「模型」按钮，`session.models` 拉取分组模型列表，`session.selectModel` 切换
 - **工具审批** — `approval/requested` 弹出「允许一次 / 拒绝」，`/api/respond` 回 `client-response`
 - **用户提问** — `question/requested` 接入 `respondQuestion`

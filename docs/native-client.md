@@ -37,7 +37,8 @@ com.dshmobile/
     DshClient.start()  -> open /api/events.mux + /api/events.host
         |                   downlink frames (envelope rpcId, payload)
         v
-    渲染: session/event -> handleEvent (assistant/chunk 文本增量 / user/message)
+    渲染: session/event -> handleEvent (assistant/chunk 按 content-block index 分块:
+          block-start → text-delta… → block-end(以完整文本落定)，text 与 tool-call 各一个 block)
           approval/requested -> respondApproval(rpcId, sessionId, approvalId, approve)
           question/requested -> respondQuestion(rpcId, cancelled)
           session/jobs -> renderJobs
