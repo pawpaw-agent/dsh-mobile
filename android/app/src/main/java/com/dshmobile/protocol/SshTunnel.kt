@@ -54,6 +54,7 @@ class SshTunnel(
 
     private val started = AtomicBoolean(false)
     private val connecting = AtomicBoolean(false)
+    @Volatile private var everConnected = false
     @Volatile private var session: Session? = null
     @Volatile private var localPort: Int = 0
     private var reconnectThread: Thread? = null
@@ -123,15 +124,19 @@ class SshTunnel(
             localPort = port
             val base = "http://127.0.0.1:$port"
             val changed = localBaseUrl != base
+            val first = !everConnected
             localBaseUrl = base
+            everConnected = true
             onStateChange?.invoke("connected")
-            if (changed) onLocalBaseChanged?.invoke(base)
+            // 首次连接由调用方负责加载；仅断线重连换端口时通知 WebView 跟随新基址
+            if (changed && !first) onLocalBaseChanged?.invoke(base)
         } catch (e: Exception) {
             Log.w(TAG, "ssh tunnel connect failed: ${e.message}")
             try { session?.disconnect() } catch (_: Exception) {}
             session = null
             localBaseUrl = null
-            onStateChange?.invoke("reconnecting")
+            if (!everConnected) onStateChange?.invoke("failed")
+            else onStateChange?.invoke("reconnecting")
         }
     }
 
