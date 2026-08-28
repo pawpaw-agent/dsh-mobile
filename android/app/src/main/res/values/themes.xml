@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  纯 WebView 壳：不依赖 Material Components / AppCompat 库，直接用平台内置主题。
+  原生客户端：不依赖 Material Components / AppCompat 库，直接用平台内置主题。
   - Theme.Material（API 21+，minSdk 26 满足）深色基底，避免冷启动白闪。
-  - colorPrimary 等 Material 属性未在代码中使用（全屏 WebView + 平台 Button/EditText），移除。
+  - colorPrimary 等 Material 属性未在代码中使用（原生 Activity + 平台 Button/EditText），移除。
   - 仅保留状态栏/导航栏颜色与窗口背景。
 -->
 <resources>

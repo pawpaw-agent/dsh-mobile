@@ -1,16 +1,17 @@
 # dsh-mobile
 
-**手机端远程使用 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）Web GUI 的 Android 全屏 WebView 壳。**
+**手机端远程使用 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）Web GUI 的**原生 Android 客户端**（非 WebView）。**
 
-连接运行在你笔记本 / VPS 上的 `dsh --profile web` 服务，在手机上获得与桌面一致的 DeepSeek Harness 编程体验。dsh-mobile 本身只是一个极简的 WebView 容器——不做任何 UI 重写，不代理你的代码或对话，所有能力都由你自己的 dsh 实例与 provider 配置提供。
+原生客户端直接实现 DSH 的线上协议与 `dsh --profile web` 通信，无需浏览器内核。连接运行在你笔记本 / VPS 上的 `dsh --profile web`，在手机上获得原生体验（会话、对话、实时流式、模型选择、工具审批、任务进度）。协议细节见 [`docs/dsh-protocol.md`](docs/dsh-protocol.md)，架构见 [`docs/native-client.md`](docs/native-client.md)。
 
 ```
 ┌─────────────────────────────┐
 │        dsh-mobile           │
-│  (Android WebView 壳)       │
+│  (原生 Android / 非 WebView) │
+│   HTTP RPC + WebSocket 事件流 │
 └──────────────┬──────────────┘
-               │  HTTP (WebView 加载页面)
-               │  局域网 / Tailscale / 隧道
+               │  http://<host>:3080
+               │  局域网 / Tailscale / 隧道 / SSH 转发
                ▼
 ┌─────────────────────────────┐
 │        dsh web              │
@@ -30,15 +31,18 @@
 
 ## 功能
 
-- **全屏沉浸 WebView** — `IMMERSIVE_STICKY` + `LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES`，WebView 铺满整块屏幕（包括状态栏后方），在三星等机型也能画到刘海后面
-- **连接屏** — 输入 host:port + 选择 http/https 协议即可连接 dsh web，默认端口 `3080`
-- **自动重连** — 上次连接的 URL 存入 SharedPreferences，下次打开 App 直接加载，无需重复输入
-- **WebView 跨重建保活** — WebView 实例由 `Application` 单例持有，转屏 / 从最近任务返回时不重载页面（保留 JS 运行时、滚动位置、会话状态）
-- **返回键导航** — 优先回退 WebView 浏览历史，无历史时回到连接屏（换服务器）
-- **安全 WebView 配置** — 关闭 `allowFileAccess` / `allowContentAccess`，开启 `domStorage`，自定义 UA `DshMobile/1.0`
-- **明文 HTTP 支持** — `usesCleartextTraffic="true"`，方便局域网直连
-- **`crypto.randomUUID` 兜底** — dsh 前端 RPC 依赖 `crypto.randomUUID`，而 WebView 在局域网明文 HTTP（非安全上下文）下访问不到该 API，会导致白屏。App 在文档开始前注入标准 UUID v4 polyfill（与 `dsh-lan-access` 插件同款、幂等），因此即使服务端没装插件也能连
-- **Basic Auth 支持** — 隧道 / 反向代理带 Basic Auth 时弹出登录框
+- **连接屏** — 输入 host:port + 选择 http/https 协议即可连接 dsh web，默认端口 `3080`；连接前做一次 `host.describe` 就绪握手
+- **会话列表与打开** — `session.list` / `session.history`，展示最近会话并可进入
+- **对话发送** — `session.prompt`（queue / steer），等待 agent 响应
+- **实时流式渲染** — `/api/events.mux` 的 `session/event` → `assistant/chunk` 文本/推理增量滚动追加
+- **模型选择** — 顶栏「模型」按钮，`session.models` 拉取分组模型列表，`session.selectModel` 切换
+- **工具审批** — `approval/requested` 弹出「允许一次 / 拒绝」，`/api/respond` 回 `client-response`
+- **用户提问** — `question/requested` 接入 `respondQuestion`
+- **任务/进度** — `session/jobs` 渲染 TaskView 列表
+- **明文 HTTP 支持** — `usesCleartextTraffic="true"`，局域网直连（原生客户端无需浏览器 polyfill/窄屏适配）
+- **`DshClient` 断线重连** — 就绪握手失败按指数退避重连（base 500ms、倍率 2、上限 10s + 抖动）
+
+> 协议层（`com.dshmobile.protocol`）还实现了 `workspace.*`、`subagent.*`、`llm.*`、`settings.*`、`credentials.*`、`goal.*` 等方法目录，供后续 UI 接入。
 
 ---
 
@@ -75,7 +79,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 - **Host** — 笔记本的局域网 IP（如 `192.168.1.100`）或 Tailscale IP（如 `100.x.x.x`）或隧道域名
 - **Port** — dsh web 端口，默认 `3080`
 
-点 **Connect**，WebView 全屏加载 dsh web，开始使用。
+点 **Connect**，App 做 `host.describe` 就绪握手后进入原生会话页，开始使用。
 
 ---
 
@@ -117,18 +121,27 @@ dsh-mobile/
 ├── android/
 │   ├── app/
 │   │   ├── src/main/
-│   │   │   ├── java/com/dshmobile/app/
-│   │   │   │   ├── MainActivity.kt      # 连接屏 + 全屏 WebView + 前后台检测
-│   │   │   │   └── DshApp.kt            # Application 单例：跨 Activity 保活 WebView
+│   │   │   ├── java/com/dshmobile/
+│   │   │   │   ├── app/
+│   │   │   │   │   ├── MainActivity.kt          # 连接屏（host:port → DshClient 就绪握手）
+│   │   │   │   │   ├── ConversationActivity.kt  # 原生会话/对话/流式/审批/模型选择
+│   │   │   │   │   └── DshApp.kt                # Application 单例：持有进程级 DshClient
+│   │   │   │   └── protocol/
+│   │   │   │       ├── Rpc.kt                   # 四象限 RPC envelope + 错误体
+│   │   │   │       ├── DshClient.kt             # HTTP RPC + 双 WebSocket + 方法目录 + respond
+│   │   │   │       └── Models.kt                # 领域数据类
 │   │   │   ├── AndroidManifest.xml
-│   │   │   └── res/                     # 启动图标 + 主题
+│   │   │   └── res/                      # 启动图标 + 主题
 │   │   ├── build.gradle.kts
-│   │   └── debug.keystore              # 固定 debug 签名（CI/本地一致，install -r 覆盖升级）
+│   │   └── debug.keystore               # 固定 debug 签名（CI/本地一致，install -r 覆盖升级）
 │   ├── build.gradle.kts
 │   ├── settings.gradle.kts
 │   └── gradle/wrapper/
 ├── scripts/
 │   └── build-apk.sh                     # 封装 gradle assembleDebug
+├── docs/
+│   ├── dsh-protocol.md                  # 逆向的 DSH 线上协议规格
+│   └── native-client.md                 # 原生客户端架构
 ├── package.json
 └── README.md
 ```
@@ -137,8 +150,9 @@ dsh-mobile/
 
 ## 注意事项
 
-- **WebView 版本**：建议使用系统最新版 Android System WebView，以支持新版 Chrome 内核能力（ADB 可 `adb shell pm trim-caches` 或到应用商店更新）。`WebViewCompat` 会在不支持 `DOCUMENT_START_SCRIPT` 的旧内核下自动跳过 polyfill 注入。
+- **网络调用**：全部在后台线程执行，UI 通过 `Handler(Looper.getMainLooper())` 回主线程刷新，避免阻塞主线程。
 - **安全**：绑定 `0.0.0.0` 后，同一内网任何设备都能访问 dsh web（无认证）。仅限家庭 / 公司可信内网使用，公共 WiFi 请勿开启；出外网请叠加 Tailscale 或 SSH 转发。
+- **配置平面 403**：`settings.*` / `credentials.*` / `agentPreset` 写 / `host.pickDirectory` / `llm.discoverModels` 仅回环可访问，远程需 SSH 端口转发（见上文「远程访问限制」）。
 
 ---
 
