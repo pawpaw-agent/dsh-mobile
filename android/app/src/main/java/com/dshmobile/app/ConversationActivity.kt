@@ -205,6 +205,16 @@ class ConversationActivity : Activity() {
     // ── 会话管理 ──────────────────────────────────────────────
     private var sessionCache: List<Models.SessionSummary> = emptyList()
 
+    private fun refreshSessionCache() {
+        Thread {
+            val r = client.sessionList()
+            if (r is Rpc.Result.Ok) {
+                sessionCache = Models.SessionList.fromJson(r.value).items
+                ui.post { updateRunningUi() }
+            }
+        }.start()
+    }
+
     private fun refreshSessionsAndOpen() {
         val r = client.sessionList()
         if (r is Rpc.Result.Ok) {
@@ -305,7 +315,9 @@ class ConversationActivity : Activity() {
                             running = payload.optBoolean("running", false)
                             updateRunningUi()
                         }
+                        refreshSessionCache()
                     }
+                    "host/session-added", "host/session-removed" -> refreshSessionCache()
                     "host/agent-error" -> {
                         val msg = payload.optString("message")
                         if (msg.isNotEmpty()) appendSystem("⚠ $msg")

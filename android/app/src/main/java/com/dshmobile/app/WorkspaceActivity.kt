@@ -214,9 +214,28 @@ class WorkspaceActivity : Activity() {
             setText(client.lastDescribe?.optString("cwd", "") ?: "")
             setTextColor(COL_TEXT); setHintTextColor(COL_MUTED); setBackgroundColor(COL_INPUT_BG)
         }
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(16), dp(24), dp(16))
+            addView(et)
+            addView(Button(this@WorkspaceActivity).apply {
+                text = "服务端选择目录"
+                setTextColor(COL_TEXT); setBackgroundColor(0x33FFFFFF)
+                setOnClickListener {
+                    Thread {
+                        val r = client.hostPickDirectory()
+                        ui.post {
+                            if (r is Rpc.Result.Ok) {
+                                r.value?.optString("path")?.takeIf { it.isNotEmpty() }?.let { et.setText(it) }
+                            } else toast("选择失败: ${errText(r)}")
+                        }
+                    }.start()
+                }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(8) })
+        }
         AlertDialog.Builder(this)
             .setTitle("创建工作区")
-            .setView(et)
+            .setView(layout)
             .setPositiveButton("创建") { _, _ ->
                 val path = et.text.toString().trim()
                 if (path.isEmpty()) { toast("路径不能为空"); return@setPositiveButton }
