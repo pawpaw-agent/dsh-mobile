@@ -174,7 +174,7 @@ class ConversationActivity : Activity() {
     }
 
     private fun subscribeEvents() {
-        client.onMuxFrame { payload ->
+        client.onMuxFrame { rpcId, payload ->
             val type = payload.optString("type")
             ui.post {
                 when (type) {
@@ -184,10 +184,74 @@ class ConversationActivity : Activity() {
                         val event = payload.optJSONObject("event") ?: return@post
                         handleEvent(event)
                     }
+                    // 工具权限审批：agent 请求执行命令时弹出(允一次/拒绝)
+                    "approval/requested" -> {
+                        val sid = payload.optString("sessionId")
+                        if (sid != sessionId) return@post
+                        showApproval(rpcId, payload)
+                    }
+                    "question/requested" -> {
+                        // 用户提问：展示问题（可选：respondQuestion）
+                    }
+                    "session/jobs" -> {
+                        // 任务/进度视图
+                        val jobs = payload.optJSONArray("jobs")
+                        if (jobs != null) renderJobs(jobs)
+                    }
                     "stream/error" -> { /* 服务端流错误，可显示 */ }
                 }
             }
         }
+    }
+
+    /** 渲染工具审批弹窗：允许一次 / 拒绝，调用 client.respondApproval 应答。 */
+    private fun showApproval(rpcId: String, payload: JSONObject) {
+        val sid = payload.optString("sessionId")
+        val approvalId = payload.optString("approvalId")
+        val toolName = payload.optString("toolName")
+        val reason = payload.optString("reason")
+
+        appendSystemBubble("🔐 请求执行工具「$toolName」${if (reason.isNotEmpty()) " — $reason" else ""}")
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle("是否需要批准？")
+            .setMessage("工具「$toolName」请求执行${if (reason.isNotEmpty()) "：$reason" else ""}")
+            .setPositiveButton("允许一次") { _, _ ->
+                Thread { client.respondApproval(rpcId, sid, approvalId, true) }.start()
+                appendSystemBubble("→ 已允许一次")
+            }
+            .setNegativeButton("拒绝") { _, _ ->
+                Thread { client.respondApproval(rpcId, sid, approvalId, false) }.start()
+                appendSystemBubble("→ 已拒绝")
+            }
+            .setOnCancelListener {
+                Thread { client.respondApproval(rpcId, sid, approvalId, false) }.start()
+            }
+            .show()
+    }
+
+    /** 渲染任务/进度视图（session/jobs → TaskView[]）。 */
+    private fun renderJobs(jobs: JSONArray) {
+        if (jobs.length() == 0) return
+        val sb = StringBuilder("🏃 任务:\n")
+        for (i in 0 until jobs.length()) {
+            val j = jobs.optJSONObject(i) ?: continue
+            val label = j.optString("label")
+            val status = j.optString("status")
+            sb.append("  • $label [$status]\n")
+        }
+        appendSystemBubble(sb.toString().trimEnd())
+    }
+
+    private fun appendSystemBubble(text: String) {
+        val tv = TextView(this).apply {
+            this.text = text
+            setTextColor(0xCCCCCC.toInt())
+            setPadding(dp(16), dp(6), dp(16), dp(6))
+            textSize = 13f
+        }
+        transcript.addView(tv)
+        ensureScrollBottom()
     }
 
     /** 处理实时 session/event：文本/推理增量 → 滚动追加。

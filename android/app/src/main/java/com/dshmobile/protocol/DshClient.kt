@@ -53,15 +53,16 @@ class DshClient(baseUrl: String, timeoutSeconds: Long = 30) {
     /** 就绪握手成功回传 host.describe value。 */
     @Volatile var onConnected: ((JSONObject?) -> Unit)? = null
 
-    // MuxFrame / HostFrame 分发监听（协议文档 §4）
-    private val muxListeners = CopyOnWriteArrayList<(JSONObject) -> Unit>()
-    private val hostListeners = CopyOnWriteArrayList<(JSONObject) -> Unit>()
+    // MuxFrame / HostFrame 分发监听（协议文档 §4）。
+    // 回调携带 (envelope rpcId, payload)。rpcId 用于回 server-request（如 approval/requested → respond）。
+    private val muxListeners = CopyOnWriteArrayList<(String, JSONObject) -> Unit>()
+    private val hostListeners = CopyOnWriteArrayList<(String, JSONObject) -> Unit>()
 
-    /** 订阅 session 事件帧（MuxFrame）。 */
-    fun onMuxFrame(fn: (JSONObject) -> Unit) { muxListeners.add(fn) }
+    /** 订阅 session 事件帧（MuxFrame）。回调参数：(envelopeRpcId, payload)。 */
+    fun onMuxFrame(fn: (String, JSONObject) -> Unit) { muxListeners.add(fn) }
 
-    /** 订阅全局状态帧（HostFrame）。 */
-    fun onHostFrame(fn: (JSONObject) -> Unit) { hostListeners.add(fn) }
+    /** 订阅全局状态帧（HostFrame）。回调参数：(envelopeRpcId, payload)。 */
+    fun onHostFrame(fn: (String, JSONObject) -> Unit) { hostListeners.add(fn) }
 
     // ── 就绪握手 + 重连循环（protocol §2.4）─────────────────────
     /** 开启连接：建立两个 downlink WebSocket 并进入握手/重连循环。幂等。 */
@@ -156,6 +157,39 @@ class DshClient(baseUrl: String, timeoutSeconds: Long = 30) {
         }
     }
 
+    /**
+     * 回 one 工具审批（protocol §3.6/§4.3）：
+     * 对 mux `approval/requested` 帧，用其 envelope rpcId 应答。
+     * @param rpcId server-request 的 envelope rpcId（approval/requested 帧携带）
+     * @param sessionId 会话 id
+     * @param approvalId approvalId
+     * @param approve true=allowed-once, false=rejected
+     */
+    fun respondApproval(rpcId: String, sessionId: String, approvalId: String, approve: Boolean): Rpc.Result {
+        val value = JSONObject()
+            .put("sessionId", sessionId)
+            .put("approvalId", approvalId)
+            .put("outcome", if (approve) "allowed-once" else "rejected")
+        return respond(rpcId, value)
+    }
+
+    /** 回 用户提问（protocol §4.1 question/requested → answered/cancelled）。
+     *  answered 发 ok=true 的 client-response；cancelled 发 ok=false。
+     *  rpcId 为 question/requested 帧的 envelope rpcId。 */
+    fun respondQuestion(rpcId: String, cancelled: Boolean = false): Rpc.Result {
+        val message = JSONObject()
+            .put("type", "client-response")
+            .put("rpcId", rpcId)
+            .put("result", JSONObject().put("ok", !cancelled))
+        val body = message.toString().toRequestBody(JSON_MEDIA)
+        val url = base.newBuilder().encodedPath("/api/respond").build()
+        val request = Request.Builder().url(url).method("POST", body).build()
+        client.newCall(request).execute().use { resp ->
+            if (!resp.isSuccessful) return Rpc.Result.Err(Rpc.Error("internal", "respond transport failure: HTTP ${resp.code}"))
+            return Rpc.Result.Ok(JSONObject(resp.body!!.string()))
+        }
+    }
+
     // ── 方法目录（protocol §3）────────────────────────────────
     /** 就绪描述。 */
     fun hostDescribe(): Rpc.Result = callUnary("host.describe", JSONObject())
@@ -211,15 +245,15 @@ class DshClient(baseUrl: String, timeoutSeconds: Long = 30) {
     fun llmModels(): Rpc.Result = callUnary("llm.models", JSONObject())
     fun llmProviders(): Rpc.Result = callUnary("llm.providers", JSONObject())
 
-    /** downlink WebSocket 监听：只收不发，解析 server-request 帧并按 payload.type 分发。 */
+    /** downlink WebSocket 监听：只收不发，解析 server-request 帧并按 payload.type 分发（携带 envelope rpcId）。 */
     private inner class DownlinkListener(
-        private val listeners: CopyOnWriteArrayList<(JSONObject) -> Unit>
+        private val listeners: CopyOnWriteArrayList<(String, JSONObject) -> Unit>
     ) : WebSocketListener() {
         override fun onMessage(socket: WebSocket, text: String) {
             try {
                 val enveloped = Rpc.parseEnvelope(text)
                 val payload = enveloped.payload ?: return
-                listeners.forEach { it(payload) }
+                listeners.forEach { it(enveloped.rpcId, payload) }
             } catch (_: Exception) {
                 // 单帧损坏不杀流（与 Web 端一致）
             }
