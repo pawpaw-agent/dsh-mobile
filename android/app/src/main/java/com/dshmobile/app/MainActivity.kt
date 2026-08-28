@@ -70,7 +70,7 @@ class MainActivity : Activity() {
         // dsh 前端 RPC 依赖 crypto.randomUUID；WebView 在局域网明文 HTTP
         //（非安全上下文）下访问不到该 API，会导致全部 RPC 失败（白屏）。
         // 标准 UUID v4 polyfill（幂等）：与 dsh-lan-access 插件的兜底一致。
-        const val CRYPTO_POLYFILL = """
+        val CRYPTO_POLYFILL = """ // trimIndent 非编译期常量，故用 val
             (function(){
               try {
                 var C = window.Crypto;
