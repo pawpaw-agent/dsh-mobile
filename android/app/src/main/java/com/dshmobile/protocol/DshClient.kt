@@ -11,7 +11,6 @@ import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -63,14 +62,16 @@ class DshClient(baseUrl: String) {
 
     // MuxFrame / HostFrame 分发监听（协议文档 §4）。
     // 回调携带 (envelope rpcId, payload)：rpcId 用于回 server-request（approval/question → /api/respond）。
-    private val muxListeners = CopyOnWriteArrayList<(String, JSONObject) -> Unit>()
-    private val hostListeners = CopyOnWriteArrayList<(String, JSONObject) -> Unit>()
+    // 监听器用「单槽 + 替换」语义：UI 是唯一消费者，Activity 重建时用 set*Listener 覆盖旧实例，
+    // 避免进程级单例持有已销毁 Activity（内存泄漏 / 重复回调）。
+    @Volatile private var muxListener: ((String, JSONObject) -> Unit)? = null
+    @Volatile private var hostListener: ((String, JSONObject) -> Unit)? = null
 
-    /** 订阅 session 事件帧（MuxFrame）。回调参数：(envelopeRpcId, payload)。 */
-    fun onMuxFrame(fn: (String, JSONObject) -> Unit) { muxListeners.add(fn) }
+    /** 设置（替换）MuxFrame 监听；传 null 取消。 */
+    fun setMuxListener(fn: ((String, JSONObject) -> Unit)?) { muxListener = fn }
 
-    /** 订阅全局状态帧（HostFrame）。回调参数：(envelopeRpcId, payload)。 */
-    fun onHostFrame(fn: (String, JSONObject) -> Unit) { hostListeners.add(fn) }
+    /** 设置（替换）HostFrame 监听；传 null 取消。 */
+    fun setHostListener(fn: ((String, JSONObject) -> Unit)?) { hostListener = fn }
 
     // ── 连接控制 ──────────────────────────────────────────────
     /** 开启连接：建立两个 downlink WebSocket 并做就绪握手（失败重试）。幂等；须在后台线程调用。 */
@@ -92,8 +93,8 @@ class DshClient(baseUrl: String) {
 
     private fun openEventSockets() {
         muxWs?.cancel(); hostWs?.cancel()
-        muxWs = http.newWebSocket(Request.Builder().url(eventUrl("/api/events.mux")).build(), Downlink(muxListeners))
-        hostWs = http.newWebSocket(Request.Builder().url(eventUrl("/api/events.host")).build(), Downlink(hostListeners))
+        muxWs = http.newWebSocket(Request.Builder().url(eventUrl("/api/events.mux")).build(), Downlink(true))
+        hostWs = http.newWebSocket(Request.Builder().url(eventUrl("/api/events.host")).build(), Downlink(false))
     }
 
     /** 同步就绪握手：成功 → connected；失败 → 退避后重开套接字再试，直到 stop()。 */
@@ -263,14 +264,13 @@ class DshClient(baseUrl: String) {
     fun llmProviders(): Rpc.Result = callUnary("llm.providers", JSONObject())
 
     /** downlink WebSocket 监听：只收不发；解析 server-request 帧并分发（携带 envelope rpcId）。 */
-    private inner class Downlink(
-        private val listeners: CopyOnWriteArrayList<(String, JSONObject) -> Unit>
-    ) : WebSocketListener() {
+    private inner class Downlink(private val isMux: Boolean) : WebSocketListener() {
         override fun onMessage(socket: WebSocket, text: String) {
             try {
                 val enveloped = Rpc.parseEnvelope(text)
                 val payload = enveloped.payload ?: return
-                listeners.forEach { it(enveloped.rpcId, payload) }
+                if (isMux) muxListener?.invoke(enveloped.rpcId, payload)
+                else hostListener?.invoke(enveloped.rpcId, payload)
             } catch (_: Exception) {
                 // 单帧损坏不杀流（与 Web 端一致）
             }

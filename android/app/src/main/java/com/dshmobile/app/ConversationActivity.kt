@@ -6,6 +6,7 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
@@ -74,6 +75,11 @@ class ConversationActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         client = (application as DshApp).client ?: run { finish(); return }
+        // 恢复状态（进程回收 / 重建）：当前会话与运行标志
+        savedInstanceState?.let {
+            sessionId = it.getString(STATE_SESSION)
+            running = it.getBoolean(STATE_RUNNING, false)
+        }
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -119,6 +125,14 @@ class ConversationActivity : Activity() {
         input = EditText(this).apply {
             hint = "输入…"; setTextColor(COL_TEXT); setHintTextColor(COL_MUTED)
             setBackgroundColor(0x33FFFFFF)
+            // 单行 + 回车直接发送（软键盘 action）
+            setSingleLine(true)
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEND
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
+                    sendPrompt(); true
+                } else false
+            }
         }
         inputRow.addView(input, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(8) })
         sendBtn = Button(this).apply {
@@ -134,8 +148,36 @@ class ConversationActivity : Activity() {
         // 事件流（幂等）：未启动则启动；之后订阅分发
         Thread { client.start() }.start()
         subscribeEvents()
-        // 打开最近会话
-        Thread { refreshSessionsAndOpen() }.start()
+
+        if (sessionId != null) {
+            // 重建恢复：直接回到原会话，并用 sessionCache 补 running 初始态
+            updateRunningUi()
+            openSession(sessionId!!)
+        } else {
+            // 首次进入：打开最近会话
+            Thread { refreshSessionsAndOpen() }.start()
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        sessionId?.let { outState.putString(STATE_SESSION, it) }
+        outState.putBoolean(STATE_RUNNING, running)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // 进程级单例：不持有已销毁的 Activity
+        if (isFinishing) {
+            client.setMuxListener(null)
+            client.setHostListener(null)
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        // 回连接屏而非退出（与 Web 壳一致的导航语义）
+        moveTaskToBack(true)
     }
 
     // ── 会话管理 ──────────────────────────────────────────────
@@ -185,6 +227,9 @@ class ConversationActivity : Activity() {
             transcript.removeAllViews()
             jobsView = null
         }
+        // 初始 running 态：session.list 缓存里就有，不必等 host/session-status 帧
+        running = sessionCache.firstOrNull { it.sessionId == sid }?.running ?: false
+        ui.post { updateRunningUi() }
         Thread {
             val r = client.sessionHistory(sid, maxMessages = HISTORY_MESSAGES)
             if (r is Rpc.Result.Ok) {
@@ -202,7 +247,8 @@ class ConversationActivity : Activity() {
 
     // ── 事件订阅与分发 ────────────────────────────────────────
     private fun subscribeEvents() {
-        client.onMuxFrame { rpcId, payload ->
+        // 单槽语义：替换旧监听，避免 Activity 重建后重复回调 / 泄漏
+        client.setMuxListener { rpcId, payload ->
             val type = payload.optString("type")
             ui.post {
                 when (type) {
@@ -227,7 +273,7 @@ class ConversationActivity : Activity() {
                 }
             }
         }
-        client.onHostFrame { _, payload ->
+        client.setHostListener { _, payload ->
             val type = payload.optString("type")
             ui.post {
                 when (type) {
@@ -556,4 +602,28 @@ class ConversationActivity : Activity() {
     private fun errText(r: Rpc.Result) = (r as? Rpc.Result.Err)?.error?.display ?: "未知错误"
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     private fun dp(n: Int) = (n * resources.displayMetrics.density + 0.5f).toInt()
+
+    /** 沉浸式全屏（沿用 WebView 版语义）：内容画到状态栏/导航栏后面。 */
+    private fun applyFullscreen() {
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            )
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) applyFullscreen()
+    }
+
+    companion object {
+        private const val STATE_SESSION = "sessionId"
+        private const val STATE_RUNNING = "running"
+    }
 }
