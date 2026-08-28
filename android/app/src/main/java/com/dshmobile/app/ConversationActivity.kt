@@ -189,8 +189,8 @@ class ConversationActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // 进程级单例：不持有已销毁的 Activity
-        if (isFinishing) {
+        // 进程级单例：不持有已销毁的 Activity（client 可能因连接失败未初始化）
+        if (isFinishing && ::client.isInitialized) {
             client.setMuxListener(null)
             client.setHostListener(null)
         }

@@ -45,8 +45,18 @@ class AgentMonitorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        ensureNotificationChannel()
         startForeground(FGS_ID, monitorNotification("DSH Mobile"))
         connect()
+    }
+
+    private fun ensureNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val channel = NotificationChannel(CHANNEL_ID, "Agent 完成通知", NotificationManager.IMPORTANCE_LOW)
+            channel.description = "DeepSeek Harness 子代理/任务完成通知"
+            nm.createNotificationChannel(channel)
+        }
     }
 
     private fun monitorNotification(text: String, done: Boolean = false): Notification =
