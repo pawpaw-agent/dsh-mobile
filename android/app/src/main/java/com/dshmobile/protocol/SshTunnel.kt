@@ -96,7 +96,7 @@ class SshTunnel(
     private fun connectOnce() {
         onStateChange?.invoke("connecting")
         try {
-            val c = SSHClient()
+            val c = createClient()
             c.addHostKeyVerifier(FingerprintVerifier(expectedFingerprint))
             c.connect(sshHost, sshPort)
             when (auth) {
@@ -145,6 +145,29 @@ class SshTunnel(
         forwarder = null
         ssh = null
         localBaseUrl = null
+    }
+
+    /**
+     * 构造 SSHClient，并把 Android 内置的「精简版 BouncyCastle」换成 sshj 依赖里的
+     * 完整版 bcprov：Android 平台的 BC 缺 X25519 / Ed25519，而 sshj 0.38 默认首选
+     * curve25519-sha256 KEX 与 ssh-ed25519 主机签名，导致
+     * "no such algorithm: X25519 for provider BC"。
+     *
+     * sshj 0.38 的 DefaultConfig 在 initKeyExchangeFactories 时会把
+     * Curve25519SHA256.Factory 放进列表，但真正失败发生在 create() 阶段；
+     * 因此只要在 new SSHClient() 之前把完整版 BC 提到最高优先级即可。
+     * 旧实现显式重设 kex/signature 列表会与 KeyAlgorithm 类型不匹配，故不覆盖。
+     */
+    private fun createClient(): SSHClient {
+        try {
+            java.security.Security.removeProvider("BC")
+            java.security.Security.insertProviderAt(
+                org.bouncycastle.jce.provider.BouncyCastleProvider(), 1
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "sshj BC provider swap failed: ${t.message}")
+        }
+        return SSHClient()
     }
 
     /** 主机公钥校验：有期望指纹则精确匹配，否则接受并记录（首连 TOFU 语义）。 */
