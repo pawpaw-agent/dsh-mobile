@@ -387,7 +387,7 @@ class DshClient(baseUrl: String) {
 
     /** downlink WebSocket 监听：只收不发；解析 server-request 帧并分发（携带 envelope rpcId）。 */
     private inner class Downlink(private val isMux: Boolean) : WebSocketListener() {
-        override fun onMessage(socket: WebSocket, text: String) {
+        override fun onMessage(webSocket: WebSocket, text: String) {
             try {
                 val enveloped = Rpc.parseEnvelope(text)
                 val payload = enveloped.payload ?: return
@@ -398,7 +398,7 @@ class DshClient(baseUrl: String) {
             }
         }
 
-        override fun onFailure(socket: WebSocket, t: Throwable, response: Response?) {
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             // 断流：退避后重开两个套接字（running=false 时静默退出）
             if (!running.get()) return
             if (backoff.compareAndSet(0, 1)) {

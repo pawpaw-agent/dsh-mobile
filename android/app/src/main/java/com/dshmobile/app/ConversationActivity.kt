@@ -226,7 +226,7 @@ class ConversationActivity : Activity() {
 
     private fun pickSession() {
         if (sessionCache.isEmpty()) { toast("暂无会话"); return }
-        val titles = sessionCache.take(15).mapIndexed { i, s ->
+        val titles = sessionCache.take(15).mapIndexed { _, s ->
             "${if (s.running) "●" else "○"} ${s.title ?: s.sessionId.take(6)}"
         }.toTypedArray()
         AlertDialog.Builder(this)
@@ -237,7 +237,7 @@ class ConversationActivity : Activity() {
     }
 
     private fun newSession() {
-        val cwd = client.lastDescribe?.optString("cwd", null)?.takeIf { it.isNotEmpty() }
+        val cwd = client.lastDescribe?.optString("cwd", "")?.takeIf { it.isNotEmpty() }
         Thread {
             val r = client.sessionCreate(cwd = cwd)
             ui.post {
@@ -685,6 +685,38 @@ class ConversationActivity : Activity() {
         }.start()
     }
 
+    private fun showSkills() {
+        val sid = sessionId ?: run { toast("先选择会话"); return }
+        Thread {
+            val r = client.skillList(sid)
+            ui.post {
+                if (r !is Rpc.Result.Ok) { toast("获取技能失败: ${errText(r)}"); return@post }
+                val arr = r.value?.optJSONArray("skills") ?: JSONArray()
+                if (arr.length() == 0) { toast("当前会话无可用技能"); return@post }
+                val sb = StringBuilder()
+                for (i in 0 until arr.length()) {
+                    val sk = arr.optJSONObject(i) ?: continue
+                    val name = sk.optString("name")
+                    val desc = sk.optString("description", "")
+                    sb.append("● ").append(name)
+                    if (sk.optBoolean("modelInvocable", false)) sb.append(" [model]")
+                    if (desc.isNotEmpty()) sb.append("\n   ").append(desc)
+                    sb.append("\n")
+                }
+                val tv = TextView(this).apply {
+                    text = sb.toString().trim()
+                    textSize = 13f; setTextColor(COL_TEXT)
+                    setPadding(dp(16), dp(12), dp(16), dp(12))
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("技能")
+                    .setView(tv)
+                    .setPositiveButton("关闭", null)
+                    .show()
+            }
+        }.start()
+    }
+
     private fun choosePreset() {
         val sid = sessionId ?: run { toast("先选择会话"); return }
         Thread {
@@ -715,7 +747,7 @@ class ConversationActivity : Activity() {
     private fun showMoreMenu() {
         val options = arrayOf(
             "搜索会话", "重命名当前会话", "Fork 当前会话",
-            "子代理", "Agent Preset", "模型/配置管理", "工作区管理"
+            "子代理", "Agent Preset", "技能列表", "模型/配置管理", "工作区管理"
         )
         AlertDialog.Builder(this)
             .setTitle("更多")
@@ -726,8 +758,9 @@ class ConversationActivity : Activity() {
                     2 -> forkSession()
                     3 -> showSubagents()
                     4 -> choosePreset()
-                    5 -> startActivity(Intent(this@ConversationActivity, ConfigActivity::class.java))
-                    6 -> startActivity(Intent(this@ConversationActivity, WorkspaceActivity::class.java))
+                    5 -> showSkills()
+                    6 -> startActivity(Intent(this@ConversationActivity, ConfigActivity::class.java))
+                    7 -> startActivity(Intent(this@ConversationActivity, WorkspaceActivity::class.java))
                 }
             }
             .show()

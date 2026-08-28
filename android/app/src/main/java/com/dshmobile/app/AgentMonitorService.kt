@@ -29,16 +29,23 @@ class AgentMonitorService : Service() {
     private var client: DshClient? = null
     private val lastRunning = HashMap<String, Boolean>()
 
-    private companion object {
-        const val CHANNEL_ID = "agent-done"
-        const val NOTIFICATION_TAG = "agent-done"
-        const val FGS_ID = 42
-        fun prefs(ctx: Context) = ctx.getSharedPreferences("dsh-mobile", Context.MODE_PRIVATE)
+    companion object {
+        private const val CHANNEL_ID = "agent-done"
+        private const val NOTIFICATION_TAG = "agent-done"
+        private const val FGS_ID = 42
+        private fun prefs(ctx: Context) = ctx.getSharedPreferences("dsh-mobile", Context.MODE_PRIVATE)
+
+        /** App 退后台时调用；回前台/退出时调用 [stop]。 */
+        fun start(ctx: Context) {
+            val i = Intent(ctx, AgentMonitorService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i) else ctx.startService(i)
+        }
+        fun stop(ctx: Context) { ctx.stopService(Intent(ctx, AgentMonitorService::class.java)) }
     }
 
     override fun onCreate() {
         super.onCreate()
-        startForeground(FGS_ID, buildMonitorNotification())
+        startForeground(FGS_ID, monitorNotification("DSH Mobile"))
         connect()
     }
 
@@ -105,12 +112,4 @@ class AgentMonitorService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    companion object {
-        /** App 退后台时调用；回前台/退出时调用 [stop]。 */
-        fun start(ctx: Context) {
-            val i = Intent(ctx, AgentMonitorService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i) else ctx.startService(i)
-        }
-        fun stop(ctx: Context) { ctx.stopService(Intent(ctx, AgentMonitorService::class.java)) }
-    }
 }

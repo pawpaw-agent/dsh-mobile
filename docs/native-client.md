@@ -76,6 +76,7 @@ com.dshmobile/
 | 会话搜索 | session.search | ✅ |
 | 会话重命名 / fork | session.rename / session.fork | ✅ |
 | Agent Preset 选择 | agentPreset.list / agentPreset.select | ✅ |
+| 技能列表 | skill.list | ✅ |
 | 工作区管理 | workspace.list/create/rename/delete + host.* | ✅ |
 | 子代理 | subagent.list/history/prompt/interrupt | ✅ |
 | 模型 / 提供方 | llm.models / llm.providers | ✅ |
