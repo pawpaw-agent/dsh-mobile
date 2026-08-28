@@ -11,6 +11,8 @@ import android.os.IBinder
 import com.dshmobile.protocol.DshClient
 import com.dshmobile.protocol.Models
 import com.dshmobile.protocol.Rpc
+import com.dshmobile.protocol.SshTunnel
+import org.json.JSONObject
 
 /**
  * Agent 完成通知服务（前台服务，App 退后台时启动）。
@@ -27,6 +29,7 @@ import com.dshmobile.protocol.Rpc
 class AgentMonitorService : Service() {
 
     private var client: DshClient? = null
+    private var sshTunnel: SshTunnel? = null
     private val lastRunning = HashMap<String, Boolean>()
 
     companion object {
@@ -72,9 +75,54 @@ class AgentMonitorService : Service() {
             .build()
 
     private fun connect() {
-        val base = prefs(this).getString("url", null) ?: run { stopSelf(); return }
-        val c = DshClient(base)
+        val prefs = prefs(this)
+        val base = prefs.getString("url", null) ?: run { stopSelf(); return }
+        val rawSsh = prefs.getString("ssh_json", null)
+        val needSsh = rawSsh != null &&
+            (prefs.getBoolean("ssh_enabled", false) || base.startsWith("http://127.0.0.1:"))
+        if (!needSsh) {
+            startMonitor(DshClient(base))
+            return
+        }
+        val cfg = rawSsh?.let { try { JSONObject(it) } catch (_: Exception) { null } }
+        val host = cfg?.optString("sshHost") ?: ""
+        val user = cfg?.optString("sshUser") ?: ""
+        if (cfg == null || host.isBlank() || user.isBlank()) {
+            startMonitor(DshClient(base))
+            return
+        }
+        val tunnel = SshTunnel(
+            sshHost = host,
+            sshPort = cfg.optInt("sshPort", 22),
+            sshUser = user,
+            remoteHost = cfg.optString("remoteHost", "127.0.0.1"),
+            remotePort = cfg.optInt("remotePort", 3080),
+            auth = if (cfg.optString("authType", "password") == "key") {
+                val keyPath = cfg.optString("keyPath", "")
+                if (keyPath.isBlank()) {
+                    startMonitor(DshClient(base))
+                    return
+                }
+                SshTunnel.Auth.KeyPair(java.io.File(keyPath), cfg.optString("keyPass").ifEmpty { null })
+            } else SshTunnel.Auth.Password(cfg.optString("password", ""))
+        )
+        Thread {
+            tunnel.start()
+            val local = tunnel.localBaseUrl
+            if (local == null) {
+                tunnel.close()
+                stopSelf()
+                return@Thread
+            }
+            // 后台通知使用和主界面一致的 SSH 回环通道
+            prefs.edit().putString("url", local).apply()
+            startMonitor(DshClient(local), tunnel)
+        }.start()
+    }
+
+    private fun startMonitor(c: DshClient, tunnel: SshTunnel? = null) {
         client = c
+        sshTunnel = tunnel
         c.setHostListener { _, payload ->
             if (payload.optString("type") != "host/session-status") return@setHostListener
             val sid = payload.optString("sessionId")
@@ -117,6 +165,8 @@ class AgentMonitorService : Service() {
     override fun onDestroy() {
         client?.stop()
         client = null
+        try { sshTunnel?.close() } catch (_: Exception) {}
+        sshTunnel = null
         super.onDestroy()
     }
 

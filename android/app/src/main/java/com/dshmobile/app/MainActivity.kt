@@ -173,7 +173,7 @@ class MainActivity : Activity() {
     }
 
     /** 启动时从保存的 SSH 配置恢复隧道，成功后把 WebView 指向新的本地端口 URL。 */
-    private fun autoConnectSsh(savedUrl: String?) {
+    private fun autoConnectSsh(@Suppress("UNUSED_PARAMETER") savedUrl: String?) {
         val savedSsh = prefs.getString("ssh_json", null)?.let {
             try { JSONObject(it) } catch (_: Exception) { null }
         } ?: run { connectView?.visibility = View.VISIBLE; return }
