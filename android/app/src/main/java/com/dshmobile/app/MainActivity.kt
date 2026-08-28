@@ -144,6 +144,7 @@ class MainActivity : Activity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
         setContentView(root)
+        applyImmersive()
 
         // 自动连接（web 模式）：上次 URL 且 WebView 未在加载它
         val savedUrl = prefs.getString("url", null)
@@ -423,19 +424,22 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun applyFullscreen() {
-        window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
-        @Suppress("DEPRECATION")
-        window.decorView.systemUiVisibility = (
-            View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            )
+    /**
+     * 沉浸式全屏：内容画到状态栏/导航栏后面（含刘海）。
+     * 用 WindowInsetsController（API 30+ 正道）—— 旧 systemUiVisibility flag
+     * 在三星 One UI / Android 16 上会被忽略（实测状态栏仍占位 128px）。
+     */
+    private fun applyImmersive() {
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        val c = androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+        c.hide(androidx.core.view.WindowInsetsCompat.Type.statusBars() or
+               androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+        c.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) applyFullscreen()
+        if (hasFocus) applyImmersive()
     }
 
     // ── 小工具 ────────────────────────────────────────────────
