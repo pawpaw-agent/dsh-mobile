@@ -6,9 +6,7 @@ import com.jcraft.jsch.Session
 import org.json.JSONObject
 import java.io.Closeable
 import java.io.File
-import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.ServerSocket
 import java.util.Properties
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -116,8 +114,8 @@ class SshTunnel(
                 }
             }
             s.connect(10_000)
-            val port = allocateLocalPort()
-            s.setPortForwardingL("127.0.0.1", port, remoteHost, remotePort)
+            // 0 = 让 JSch 自己分配空闲端口，避免手动占/释放端口导致的 Already bound
+            val port = s.setPortForwardingL("127.0.0.1", 0, remoteHost, remotePort)
             session = s
             localPort = port
             localBaseUrl = "http://127.0.0.1:$port"
@@ -137,12 +135,6 @@ class SshTunnel(
         put("PreferredAuthentications", "password,publickey,keyboard-interactive")
     }
 
-    private fun allocateLocalPort(): Int =
-        ServerSocket(0).use { ss ->
-            ss.reuseAddress = true
-            ss.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0))
-            ss.localPort
-        }
 
     override fun close() {
         started.set(false)
