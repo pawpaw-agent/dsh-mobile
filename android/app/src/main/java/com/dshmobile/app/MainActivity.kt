@@ -66,6 +66,7 @@ class MainActivity : Activity() {
         const val DEFAULT_PORT = "3080"
 
         const val PREF_MODE = "mode" // "web" | "native"
+        const val PREF_SSH_ENABLED = "ssh_enabled" // 上次是否通过 SSH 隧道连接
 
         // dsh 前端 RPC 依赖 crypto.randomUUID；WebView 在局域网明文 HTTP
         //（非安全上下文）下访问不到该 API，会导致全部 RPC 失败（白屏）。
@@ -146,19 +147,84 @@ class MainActivity : Activity() {
         setContentView(root)
         applyImmersive()
 
-        // 自动连接（web 模式）：上次 URL 且 WebView 未在加载它
+        // 自动连接（web + SSH 优先）：上次模式带 SSH 的先恢复隧道，再加载本地回环 URL。
+        // 直连模式仍直接加载保存的 URL，避免每次启动重新输入。
         val savedUrl = prefs.getString("url", null)
         val savedMode = prefs.getString(PREF_MODE, "web") ?: "web"
         val currentUrl = webView?.url
         val baseMatch = savedUrl != null && currentUrl != null &&
             currentUrl.trimEnd('/').startsWith(savedUrl.trimEnd('/'))
+        val sshSaved = prefs.getBoolean(PREF_SSH_ENABLED, false) &&
+            prefs.getString("ssh_json", null) != null
         if (savedMode == "web" && savedUrl != null && !baseMatch) {
-            connectView?.visibility = View.GONE
-            lastUrl = savedUrl
-            webView?.loadUrl(savedUrl)
+            if (sshSaved) {
+                autoConnectSsh(savedUrl)
+            } else {
+                connectView?.visibility = View.GONE
+                lastUrl = savedUrl
+                webView?.loadUrl(savedUrl)
+            }
         } else if (savedMode == "web" && !currentUrl.isNullOrBlank()) {
             connectView?.visibility = View.GONE
         }
+    }
+
+    /** 启动时从保存的 SSH 配置恢复隧道，成功后把 WebView 指向新的本地端口 URL。 */
+    private fun autoConnectSsh(savedUrl: String?) {
+        val savedSsh = prefs.getString("ssh_json", null)?.let {
+            try { JSONObject(it) } catch (_: Exception) { null }
+        } ?: run { connectView?.visibility = View.VISIBLE; return }
+        val host = savedSsh.optString("sshHost")
+        val user = savedSsh.optString("sshUser")
+        if (host.isBlank() || user.isBlank()) { connectView?.visibility = View.VISIBLE; return }
+        val port = savedSsh.optInt("sshPort", 22)
+        val remotePort = savedSsh.optInt("remotePort", DEFAULT_PORT.toInt())
+        val app = application as DshApp
+        status("自动重建 SSH 隧道…")
+        connectView?.visibility = View.VISIBLE
+        Thread {
+            val auth = if (savedSsh.optString("authType", "password") == "key") {
+                val keyPath = savedSsh.optString("keyPath", "")
+                if (keyPath.isBlank()) {
+                    runOnUiThread { status("SSH 私钥路径为空，请在连接屏重新配置") }
+                    return@Thread
+                }
+                SshTunnel.Auth.KeyPair(
+                    java.io.File(keyPath),
+                    savedSsh.optString("keyPass").ifEmpty { null }
+                )
+            } else {
+                SshTunnel.Auth.Password(savedSsh.optString("password", ""))
+            }
+            val tunnel = SshTunnel(
+                sshHost = host, sshPort = port, sshUser = user,
+                remoteHost = savedSsh.optString("remoteHost", "127.0.0.1"),
+                remotePort = remotePort,
+                auth = auth
+            )
+            tunnel.onStateChange = { s -> runOnUiThread { status("隧道: $s") } }
+            tunnel.onLocalBaseChanged = { newBase ->
+                runOnUiThread {
+                    lastUrl = newBase
+                    prefs.edit().putString("url", newBase).apply()
+                    webView?.loadUrl(newBase)
+                }
+            }
+            tunnel.start()
+            val base = tunnel.localBaseUrl
+            runOnUiThread {
+                if (base == null) {
+                    tunnel.close()
+                    status("自动连接失败，请在连接屏手动重试")
+                    return@runOnUiThread
+                }
+                app.sshTunnel = tunnel
+                prefs.edit().putString("url", base).apply()
+                connectView?.visibility = View.GONE
+                lastUrl = base
+                webView?.loadUrl(base)
+            }
+        }.start()
     }
 
     // ── 连接屏 UI ─────────────────────────────────────────────
@@ -211,6 +277,9 @@ class MainActivity : Activity() {
             it.visibility = View.GONE
             column.addView(it, rowParams(top = dp(8), width = dp(300), height = dp(44)))
         }
+        // 恢复上次 SSH 开关状态；勾选时立即显示字段
+        sshToggle.isChecked = prefs.getBoolean(PREF_SSH_ENABLED, false)
+        sshFields.forEach { it.visibility = if (sshToggle.isChecked) View.VISIBLE else View.GONE }
         sshToggle.setOnCheckedChangeListener { _, checked ->
             sshFields.forEach { it.visibility = if (checked) View.VISIBLE else View.GONE }
         }
@@ -258,6 +327,7 @@ class MainActivity : Activity() {
                 prefs.edit().putString(PREF_MODE, mode).apply()
 
                 val remotePort = portInput.text.toString().trim().ifEmpty { DEFAULT_PORT }.toIntOrNull() ?: 3080
+                prefs.edit().putBoolean(PREF_SSH_ENABLED, useSsh).apply()
                 if (useSsh) {
                     val sh = sshHostInput.text.toString().trim()
                     val su = sshUserInput.text.toString().trim()
@@ -327,6 +397,9 @@ class MainActivity : Activity() {
                 auth = SshTunnel.Auth.Password(password)
             )
             tunnel.onStateChange = { s -> runOnUiThread { status("隧道: $s") } }
+            tunnel.onLocalBaseChanged = { newBase ->
+                runOnUiThread { connectWeb(newBase) }
+            }
             tunnel.start()
             val base = tunnel.localBaseUrl
             runOnUiThread {

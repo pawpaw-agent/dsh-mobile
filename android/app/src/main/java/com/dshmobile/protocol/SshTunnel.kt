@@ -64,6 +64,9 @@ class SshTunnel(
 
     @Volatile var onStateChange: ((String) -> Unit)? = null  // connecting / connected / reconnecting
 
+    /** 本地端口/基址变化（SSH 断线重连后会更换端口）；WebView 需据此重新加载。 */
+    @Volatile var onLocalBaseChanged: ((String) -> Unit)? = null
+
     /** 建立隧道并阻塞等待本地监听就绪（最多 ~10s）。成功返回本地端口。 */
     @Synchronized
     fun start(): Int {
@@ -118,8 +121,11 @@ class SshTunnel(
             val port = s.setPortForwardingL("127.0.0.1", 0, remoteHost, remotePort)
             session = s
             localPort = port
-            localBaseUrl = "http://127.0.0.1:$port"
+            val base = "http://127.0.0.1:$port"
+            val changed = localBaseUrl != base
+            localBaseUrl = base
             onStateChange?.invoke("connected")
+            if (changed) onLocalBaseChanged?.invoke(base)
         } catch (e: Exception) {
             Log.w(TAG, "ssh tunnel connect failed: ${e.message}")
             try { session?.disconnect() } catch (_: Exception) {}

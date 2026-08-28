@@ -6,7 +6,7 @@
 
 - **完整网页（默认）** — 全屏 WebView 加载 dsh web 前端，功能与桌面 100% 一致（Markdown / 代码高亮 / 设置页 / 会话树……）。内置 `crypto.randomUUID` 文档启动注入（局域网明文 HTTP 防白屏）、Basic Auth 弹窗、错误重试页、WebView 跨重建保活。
 - **原生简版** — 内置协议客户端（`/api` RPC + `/api/events.mux`、`/api/events.host` 双 WebSocket downlink），轻量遥控：会话、对话、实时流式、模型选择、工具审批、任务进度。协议细节见 [`docs/dsh-protocol.md`](docs/dsh-protocol.md)，架构见 [`docs/native-client.md`](docs/native-client.md)。
-- **SSH 隧道（两种模式通用）** — 内置 sshj 本地端口转发，服务端视角为回环，**解锁设置/凭据等本机限制接口**（官方认可的合规远程完整方案），无需 `dsh-lan-access` 插件、无需 `--host 0.0.0.0`。
+- **SSH 隧道（两种模式通用）** — 内置 JSch 本地端口转发，服务端视角为回环，**解锁设置/凭据等本机限制接口**（官方认可的合规远程完整方案），无需 `dsh-lan-access` 插件、无需 `--host 0.0.0.0`；支持密码登录、私钥登录（含口令），SSH 断线自动重连，App 重启后自动重建隧道。
 
 ```
 ┌─────────────────────────────┐
@@ -35,7 +35,7 @@
 
 ## 功能
 
-- **连接屏** — 输入 host:port + 选择 http/https 协议即可连接 dsh web，默认端口 `3080`；连接前做一次 `host.describe` 就绪握手
+- **连接屏** — 输入 host:port + 选择 http/https 协议即可连接 dsh web，默认端口 `3080`；连接前做一次 `host.describe` 就绪握手；SSH 隧道配置持久化，App 重启自动恢复
 - **会话列表与打开** — `session.list` / `session.history`，展示最近会话并可进入
 - **对话发送** — `session.prompt`（queue / steer），等待 agent 响应
 - **实时流式渲染** — `/api/events.mux` 的 `session/event` → `assistant/chunk`，按 content-block index 分块渲染（text 与 tool-call 分属不同 block，`block-end` 以服务端完整文本落定）
