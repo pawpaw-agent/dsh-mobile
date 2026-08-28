@@ -1,17 +1,24 @@
 package com.dshmobile.app
 
 import android.app.Application
+import android.webkit.WebView
 import com.dshmobile.protocol.DshClient
 
 /**
- * Application 级单例：持有跨 Activity 存活的 [DshClient]。
+ * Application 级单例：持有跨 Activity 存活的 [DshClient] 与 WebView。
  *
- * 让原生 DshClient（HTTP + 两个 WebSocket downlink）不随 Activity/转屏重建——
- * 会话状态、连接、事件流订阅全部保留。仅进程存活期间有效；进程被系统杀死后需重连。
+ * - WebView（完整网页模式）：跨重建保活，避免重新 loadUrl —— 前端 bundle 不必
+ *   重新下载/解析/执行，滚动位置、JS 运行时、会话状态全部保留。
+ * - DshClient（原生简版模式）：HTTP + 双 WebSocket downlink 不随 Activity 重建。
+ * - SshTunnel：SSH 模式连接时持有，退出/重连时 close。
  */
 class DshApp : Application() {
 
-    /** 进程级单例客户端；由连接屏在连接成功后设置 base，或直接 set。 */
+    /** WebView 保留实例（完整网页模式）。 */
+    @Volatile
+    var retainedWebView: WebView? = null
+
+    /** 进程级单例客户端（原生简版模式）。 */
     @Volatile
     var client: DshClient? = null
 
