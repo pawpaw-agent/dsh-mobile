@@ -160,10 +160,8 @@ class SshTunnel(
         val cfg = net.schmizz.sshj.AndroidConfig()
         try {
             cfg.keyExchangeFactories = listOf(
-                net.schmizz.sshj.transport.kex.ECDHNistP.Factory256(),
-                net.schmizz.sshj.transport.kex.ECDHNistP.Factory384(),
-                net.schmizz.sshj.transport.kex.ECDHNistP.Factory521(),
                 net.schmizz.sshj.transport.kex.DHG14.Factory(),
+                net.schmizz.sshj.transport.kex.DHGexSHA256.Factory(),
                 net.schmizz.sshj.transport.kex.DHG1.Factory()
             )
             cfg.keyAlgorithms = listOf(
