@@ -411,8 +411,27 @@ class MainActivity : Activity() {
     private fun hideErrorPage() { errorView?.visibility = View.GONE }
 
     // ── 生命周期 ──────────────────────────────────────────────
-    override fun onResume() { super.onResume(); webView?.onResume(); webView?.resumeTimers() }
-    override fun onPause() { super.onPause(); webView?.onPause(); webView?.pauseTimers() }
+    override fun onResume() {
+        super.onResume()
+        webView?.onResume(); webView?.resumeTimers()
+        AgentMonitorService.stop(this) // 回前台：页面自己能看到，停掉监听服务
+    }
+
+    override fun onPause() {
+        super.onPause()
+        webView?.onPause(); webView?.pauseTimers()
+        // 退后台：若已连接过（有 url），启动 agent 完成通知监听
+        if (prefs.getString("url", null) != null) requestNotifyPermissionThenMonitor()
+    }
+
+    /** Android 13+ 通知运行时权限；已授权/被拒都尝试启动（无权限时通知静默不响，不影响 FGS）。 */
+    private fun requestNotifyPermissionThenMonitor() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
+        }
+        AgentMonitorService.start(this)
+    }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
