@@ -16,6 +16,7 @@ import android.widget.RadioGroup
 import android.widget.TextView
 import org.json.JSONObject
 import com.dshmobile.protocol.DshClient
+import com.dshmobile.protocol.SshTunnel
 
 /**
  * dsh-mobile 原生客户端（不用 WebView）：连接屏。

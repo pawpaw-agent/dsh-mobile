@@ -2,6 +2,8 @@ package com.dshmobile.protocol
 
 import android.util.Log
 import net.schmizz.sshj.SSHClient
+import net.schmizz.sshj.localportforward.LocalPortForwarder
+import net.schmizz.sshj.connection.channel.direct.Parameters
 import net.schmizz.sshj.userauth.keyprovider.OpenSSHKeyFile
 import net.schmizz.sshj.userauth.password.PasswordUtils
 import org.json.JSONObject
@@ -113,7 +115,11 @@ class SshTunnel(
                 ss.reuseAddress = true
                 ss.bind(java.net.InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), 0))
                 val listenerPort = ss.localPort
-                forwarder = c.newLocalPortForwarder(ss, remoteHost, remotePort)
+                val params = Parameters(
+                    "127.0.0.1", listenerPort,  // 手机侧绑定
+                    remoteHost, remotePort      // sshd 视角的远端
+                )
+                forwarder = c.newLocalPortForwarder(params, ss)
                 boundPort = listenerPort
             } catch (e: Exception) {
                 try { ss.close() } catch (_: Exception) {}
