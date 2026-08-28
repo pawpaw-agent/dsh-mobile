@@ -2,6 +2,9 @@ package com.dshmobile.app
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
 import android.os.Bundle
@@ -224,15 +227,88 @@ class ConversationActivity : Activity() {
         }
     }
 
+    /**
+     * 会话选择器：自绘列表（非 AlertDialog.setItems），支持：
+     *  - 顶部搜索框（按标题 / sessionId 过滤）
+     *  - 全量会话（不再截断 15 条）
+     *  - 每行显示 运行状态●/○ + 标题 + 相对时间 + turn/step 数
+     *  - 运行中的会话排在最前
+     *  - 点击行打开会话
+     */
     private fun pickSession() {
         if (sessionCache.isEmpty()) { toast("暂无会话"); return }
-        val titles = sessionCache.take(15).mapIndexed { _, s ->
-            "${if (s.running) "●" else "○"} ${s.title ?: s.sessionId.take(6)}"
-        }.toTypedArray()
+        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val filter = EditText(this).apply {
+            hint = "搜索会话…"
+            setSingleLine(true)
+            setTextColor(COL_TEXT); setHintTextColor(COL_MUTED); setBackgroundColor(0x33FFFFFF)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        container.addView(filter, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { setMargins(dp(16), dp(12), dp(16), dp(4)) })
+
+        val listHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        container.addView(ScrollView(this).apply { addView(listHost) }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+        ))
+
+        fun render(query: String) {
+            listHost.removeAllViews()
+            val q = query.trim().lowercase()
+            // 排序：running 优先，其次 updatedAt 新的在前
+            val sorted = sessionCache
+                .filter { q.isEmpty() || (it.title ?: "").lowercase().contains(q) || it.sessionId.lowercase().contains(q) }
+                .sortedWith(compareByDescending<Models.SessionSummary> { it.running }.thenByDescending { it.updatedAt })
+            if (sorted.isEmpty()) {
+                listHost.addView(TextView(this).apply {
+                    text = "无匹配会话"; textSize = 13f; setTextColor(COL_MUTED)
+                    setPadding(dp(16), dp(12), dp(16), dp(12))
+                })
+                return
+            }
+            for (s in sorted) {
+                val title = s.title ?: s.sessionId.take(10)
+                val time = if (s.updatedAt > 0) {
+                    val age = System.currentTimeMillis() - s.updatedAt
+                    when {
+                        age < 60_000L -> "刚刚"
+                        age < 3_600_000L -> "${age / 60_000} 分钟前"
+                        age < 86_400_000L -> "${age / 3_600_000} 小时前"
+                        else -> "${age / 86_400_000} 天前"
+                    }
+                } else ""
+                val stats = buildString {
+                    if (s.turnCount != null && s.turnCount > 0) append(" · ${s.turnCount} turn")
+                    if (s.stepCount != null && s.stepCount > 0) append(" · ${s.stepCount} step")
+                }
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(12), dp(8), dp(12), dp(8)) }
+                row.addView(TextView(this).apply {
+                    text = "${if (s.running) "●" else "○"} $title"
+                    textSize = 15f
+                    setTextColor(if (s.running) COL_ACCENT else COL_TEXT)
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(TextView(this).apply {
+                    text = (time + stats).trimStart('·').trim()
+                    textSize = 11f; setTextColor(COL_MUTED)
+                })
+                row.setOnClickListener { openSession(s.sessionId) }
+                listHost.addView(row)
+            }
+        }
+        render("")
+        filter.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) { render(s?.toString() ?: "") }
+        })
+
         AlertDialog.Builder(this)
-            .setTitle("选择会话")
-            .setItems(titles) { _, which -> openSession(sessionCache[which].sessionId) }
-            .setNegativeButton("刷新") { _, _ -> Thread { refreshSessionsAndOpen() }.start() }
+            .setTitle("会话（${sessionCache.size}）")
+            .setView(container)
+            .setPositiveButton("关闭", null)
+            .setNeutralButton("刷新") { _, _ -> Thread { refreshSessionsAndOpen() }.start() }
             .show()
     }
 
@@ -537,6 +613,17 @@ class ConversationActivity : Activity() {
         ensureScrollBottom()
     }
 
+    /** 长按任意气泡/工具行 → 复制到剪贴板（原生 UI 最常用的补齐能力）。 */
+    private fun attachCopyOnLongPress(v: View) {
+        v.setOnLongClickListener {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val label = if (v is TextView) "消息" else "文本"
+            cm.setPrimaryClip(ClipData.newPlainText(label, (v as? TextView)?.text ?: ""))
+            toast("已复制")
+            true
+        }
+    }
+
     private fun appendToolLine(text: String) {
         transcript.addView(TextView(this).apply {
             this.text = text
@@ -546,6 +633,7 @@ class ConversationActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { setMargins(dp(16), dp(1), dp(16), dp(1)) }
+            attachCopyOnLongPress(this)
         })
         ensureScrollBottom()
     }
@@ -556,6 +644,7 @@ class ConversationActivity : Activity() {
             setTextColor(0xCCCCCC.toInt())
             textSize = 13f
             setPadding(dp(16), dp(6), dp(16), dp(6))
+            attachCopyOnLongPress(this)
         })
         ensureScrollBottom()
     }
@@ -621,12 +710,25 @@ class ConversationActivity : Activity() {
             setTextColor(COL_TEXT); setBackgroundColor(color)
             textSize = 15f
             setPadding(dp(12), dp(10), dp(12), dp(10))
+            setTextIsSelectable(false)
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { setMargins(if (left) dp(16) else dp(48), dp(4), if (left) dp(48) else dp(16), dp(4)) }
+            attachCopyOnLongPress(this)
         }
 
-    private fun ensureScrollBottom() { scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) } }
+    /**
+     * 智能自动滚动：仅当用户已处于底部附近（<= 96dp）时才跟随新内容；
+     * 用户向上翻历史时不再被强拉回底部。
+     */
+    private fun ensureScrollBottom() {
+        scroll.post {
+            val pad = dp(96)
+            val atBottom = scroll.scrollY + scroll.height >= transcript.height - pad
+            if (atBottom) scroll.fullScroll(ScrollView.FOCUS_DOWN)
+        }
+    }
+
 
     /** user/message: data.content[]；assistant/message: data.message.content[]。 */
     private fun extractText(data: JSONObject?): String? {
