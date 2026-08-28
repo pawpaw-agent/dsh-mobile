@@ -1,14 +1,18 @@
 # dsh-mobile
 
-**手机端远程使用 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）Web GUI 的**原生 Android 客户端**（非 WebView）。**
+**手机端使用 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）的双模式 Android 客户端。**
 
-原生客户端直接实现 DSH 的线上协议与 `dsh --profile web` 通信，无需浏览器内核。连接运行在你笔记本 / VPS 上的 `dsh --profile web`，在手机上获得原生体验（会话、对话、实时流式、模型选择、工具审批、任务进度）。协议细节见 [`docs/dsh-protocol.md`](docs/dsh-protocol.md)，架构见 [`docs/native-client.md`](docs/native-client.md)。
+连接运行在你笔记本 / VPS 上的 `dsh --profile web`，连接屏可选：
+
+- **完整网页（默认）** — 全屏 WebView 加载 dsh web 前端，功能与桌面 100% 一致（Markdown / 代码高亮 / 设置页 / 会话树……）。内置 `crypto.randomUUID` 文档启动注入（局域网明文 HTTP 防白屏）、Basic Auth 弹窗、错误重试页、WebView 跨重建保活。
+- **原生简版** — 内置协议客户端（`/api` RPC + `/api/events.mux`、`/api/events.host` 双 WebSocket downlink），轻量遥控：会话、对话、实时流式、模型选择、工具审批、任务进度。协议细节见 [`docs/dsh-protocol.md`](docs/dsh-protocol.md)，架构见 [`docs/native-client.md`](docs/native-client.md)。
+- **SSH 隧道（两种模式通用）** — 内置 sshj 本地端口转发，服务端视角为回环，**解锁设置/凭据等本机限制接口**（官方认可的合规远程完整方案），无需 `dsh-lan-access` 插件、无需 `--host 0.0.0.0`。
 
 ```
 ┌─────────────────────────────┐
 │        dsh-mobile           │
-│  (原生 Android / 非 WebView) │
-│   HTTP RPC + WebSocket 事件流 │
+│  完整网页(WebView，默认) 或   │
+│  原生简版(RPC+WS 事件流)     │
 └──────────────┬──────────────┘
                │  http://<host>:3080
                │  局域网 / Tailscale / 隧道 / SSH 转发
