@@ -485,16 +485,31 @@ class MainActivity : Activity() {
 
     /**
      * 沉浸式全屏：内容画到状态栏/导航栏后面（含刘海）。
-     * 用 WindowInsetsController（API 30+ 正道）—— 旧 systemUiVisibility flag
-     * 在三星 One UI / Android 16 上会被忽略（实测状态栏仍占位 128px）。
+     * 同时使用 WindowInsetsController（API 30+ 正道）和传统 systemUiVisibility 标志，
+     * 以兼容三星 One UI / 不同 WebView 版本对沉浸式的处理差异。
      */
     private fun applyImmersive() {
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        // 让状态栏/导航栏区域透明，WebView 内容从下面一直铺到屏幕边缘
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            window.statusBarColor = android.graphics.Color.TRANSPARENT
+            window.navigationBarColor = android.graphics.Color.TRANSPARENT
+        }
         window.decorView.post {
             val c = androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
             c.hide(androidx.core.view.WindowInsetsCompat.Type.statusBars() or
                    androidx.core.view.WindowInsetsCompat.Type.navigationBars())
             c.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            // 传统沉浸标志兜底（部分 One UI / 老 WebView 依赖它才能真正全屏）
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                    View.SYSTEM_UI_FLAG_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                )
         }
     }
 
