@@ -303,11 +303,13 @@ class MainActivity : Activity() {
         fun input(hint: String, prefill: String = "", pwd: Boolean = false): EditText =
             EditText(this).apply {
                 this.hint = hint
+                textSize = 14f
                 setTextColor(COL_TEXT)
                 setHintTextColor(COL_HINT)
                 setBackgroundResource(R.drawable.bg_input)
-                setPadding(dp(14), dp(11), dp(14), dp(11))
+                setPadding(dp(12), dp(10), dp(12), dp(10))
                 setSingleLine(true)
+                setHorizontallyScrolling(true)
                 if (pwd) transformationMethod = android.text.method.PasswordTransformationMethod.getInstance()
                 if (prefill.isNotEmpty()) setText(prefill)
             }
@@ -385,20 +387,23 @@ class MainActivity : Activity() {
 
         val hostInput = EditText(this).apply {
             hint = "服务器 IP / 域名"
+            textSize = 14f
             setText(prefillHost)
             setTextColor(COL_TEXT); setHintTextColor(COL_HINT)
             setBackgroundResource(R.drawable.bg_input)
-            setPadding(dp(16), dp(13), dp(16), dp(13)); setSingleLine(true)
+            setPadding(dp(12), dp(11), dp(12), dp(11)); setSingleLine(true)
+            setHorizontallyScrolling(true)
         }
         val portInput = EditText(this).apply {
-            hint = "端口"; setText(prefillPort)
+            hint = "端口"; textSize = 14f; setText(prefillPort)
             setTextColor(COL_TEXT); setHintTextColor(COL_HINT)
             setBackgroundResource(R.drawable.bg_input)
-            setPadding(dp(16), dp(12), dp(16), dp(12)); setSingleLine(true)
+            setPadding(dp(12), dp(11), dp(12), dp(11)); setSingleLine(true)
+            setHorizontallyScrolling(true)
         }
         val serverRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(hostInput, LinearLayout.LayoutParams(0, dp(42), 2f).apply { marginEnd = dp(8) })
+            addView(hostInput, LinearLayout.LayoutParams(0, dp(42), 3f).apply { marginEnd = dp(8) })
             addView(portInput, LinearLayout.LayoutParams(0, dp(42), 1f))
         }
         card.addView(serverRow, rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
@@ -485,6 +490,7 @@ class MainActivity : Activity() {
             minHeight = dp(28)
             setBackgroundResource(R.drawable.bg_status_pill)
             setPadding(dp(14), dp(4), dp(14), dp(4))
+            visibility = View.GONE
         }
         card.addView(statusView, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
@@ -564,7 +570,10 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun status(msg: String) { statusView?.text = msg }
+    private fun status(msg: String) {
+        statusView?.text = msg
+        statusView?.visibility = if (msg.isBlank()) View.GONE else View.VISIBLE
+    }
 
     // ── WebView 直连 ─────────────────────────────────────────
     private fun connectWeb(url: String) {
