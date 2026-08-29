@@ -381,7 +381,7 @@ class MainActivity : Activity() {
             addView(httpBtn, LinearLayout.LayoutParams(0, dp(38), 1f).apply { marginEnd = dp(6) })
             addView(httpsBtn, LinearLayout.LayoutParams(0, dp(38), 1f).apply { marginStart = dp(6) })
         }
-        card.addView(protocolGroup, rowParams(top = dp(8)))
+        card.addView(protocolGroup, rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         val hostInput = EditText(this).apply {
             hint = "192.168.1.100 / 100.x.x.x / 隧道域名"
@@ -401,7 +401,7 @@ class MainActivity : Activity() {
             addView(hostInput, LinearLayout.LayoutParams(0, dp(42), 2f).apply { marginEnd = dp(8) })
             addView(portInput, LinearLayout.LayoutParams(0, dp(42), 1f))
         }
-        card.addView(serverRow, rowParams(top = dp(8)))
+        card.addView(serverRow, rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         // SSH 隧道
         val savedSsh = prefs.getString("ssh_json", null)?.let {
