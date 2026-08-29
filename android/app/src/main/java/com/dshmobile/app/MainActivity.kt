@@ -342,13 +342,13 @@ class MainActivity : Activity() {
             typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
             setTextColor(COL_TITLE)
             gravity = Gravity.CENTER
-        }, rowParams(top = dp(6)))
+        }, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
         card.addView(TextView(this).apply {
             text = "DeepSeek Harness · 手机端"
             textSize = 11f
             setTextColor(COL_MUTED)
             gravity = Gravity.CENTER
-        }, rowParams(top = dp(4)))
+        }, rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         card.addView(label("服务器地址"), rowParams(top = dp(16)))
 
@@ -412,7 +412,7 @@ class MainActivity : Activity() {
             text = "启用 SSH"
             setTextColor(COL_TEXT)
             thumbTintList = ColorStateList.valueOf(COL_ACCENT)
-            trackTintList = ColorStateList.valueOf(0x33FFFFFF.toInt())
+            trackTintList = ColorStateList.valueOf(0x22FFFFFF.toInt())
             isChecked = prefs.getBoolean(PREF_SSH_ENABLED, false)
         }
         card.addView(sshToggle, rowParams(top = dp(6)))
@@ -479,12 +479,14 @@ class MainActivity : Activity() {
         card.addView(spacer(dp(10)))
 
         statusView = TextView(this).apply {
-            textSize = 13f
+            textSize = 12f
             setTextColor(COL_MUTED)
             gravity = Gravity.CENTER
-            minHeight = dp(14)
+            minHeight = dp(28)
+            setBackgroundResource(R.drawable.bg_status_pill)
+            setPadding(dp(14), dp(4), dp(14), dp(4))
         }
-        card.addView(statusView)
+        card.addView(statusView, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         card.addView(Button(this).apply {
             text = "连接"
@@ -522,7 +524,7 @@ class MainActivity : Activity() {
                     connectWeb(url)
                 }
             }
-        }, rowParams(top = dp(6), height = dp(44), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        }, rowParams(top = dp(12), height = dp(44), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         card.addView(TextView(this).apply {
             text = "网页=桌面级 · SSH=解锁本机配置"
