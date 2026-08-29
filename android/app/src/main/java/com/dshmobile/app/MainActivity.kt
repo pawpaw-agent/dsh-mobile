@@ -96,10 +96,15 @@ class MainActivity : Activity() {
               try {
                 var style = document.createElement('style');
                 style.textContent = `
-                  html, body, #root { height: 100dvh !important; min-height: 100dvh !important; }
-                  html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !important; }
+                  html, body { margin: 0 !important; padding: 0 !important; }
+                  html, body { overflow-x: hidden !important; }
+                  body { min-height: 100dvh !important; }
+                  #root { min-height: 100dvh !important; }
                   [data-slot="conversation"], [data-slot="sidebar"] { height: 100dvh !important; }
-                  body { padding-bottom: 0 !important; }
+                  [data-composer-card] {
+                    padding-bottom: max(8px, env(safe-area-inset-bottom)) !important;
+                  }
+                  [data-slot="conversation.input"] { padding-bottom: max(8px, env(safe-area-inset-bottom)) !important; }
                 `;
                 (document.head || document.documentElement).appendChild(style);
               } catch(e) {}
