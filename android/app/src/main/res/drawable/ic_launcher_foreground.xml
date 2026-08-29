@@ -4,30 +4,28 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 鲸鱼身体 -->
+    <!-- 白色鲸鱼身体（圆润胶囊形） -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M28,60 C28,50 38,42 52,42 C70,42 82,50 82,60 C82,68 72,74 56,74 C42,74 30,68 28,60 Z"/>
-    <!-- 尾巴（红色点缀） -->
+        android:pathData="M28,56 C28,44 40,36 54,36 C70,36 80,44 80,56 C80,66 68,74 54,74 C40,74 28,66 28,56 Z"/>
+    <!-- 红色上尾鳍 -->
     <path
         android:fillColor="#E94560"
-        android:pathData="M80,54 C84,47 90,44 95,46 C98,48 94,55 90,58 C86,62 82,60 80,56 Z"/>
+        android:pathData="M74,48 C82,40 92,38 98,40 C96,48 90,54 80,56 C77,54 75,51 74,48 Z"/>
+    <!-- 红色下尾鳍 -->
+    <path
+        android:fillColor="#E94560"
+        android:pathData="M74,62 C82,70 92,72 98,70 C96,62 90,56 80,54 C77,56 75,59 74,62 Z"/>
     <!-- 眼睛 -->
     <path
         android:fillColor="#0F3460"
-        android:pathData="M48,52 C48,50 50,48 52,48 C54,48 56,50 56,52 C56,54 54,56 52,56 C50,56 48,54 48,52 Z"/>
-    <!-- 鳍 -->
+        android:pathData="M44,52 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0 Z"/>
+    <!-- 红色胸鳍 -->
     <path
         android:fillColor="#E94560"
-        android:pathData="M44,62 C48,57 56,57 62,62 C56,66 50,66 44,62 Z"/>
-    <!-- 底部水花/网络点 -->
-    <path
-        android:fillColor="#7AD7F0"
-        android:pathData="M36,78 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 Z"/>
-    <path
-        android:fillColor="#7AD7F0"
-        android:pathData="M52,80 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 Z"/>
-    <path
-        android:fillColor="#7AD7F0"
-        android:pathData="M68,78 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 Z"/>
+        android:pathData="M42,72 C48,64 60,62 68,64 C62,72 52,76 42,72 Z"/>
+    <!-- 青色水泡/节点 -->
+    <path android:fillColor="#7AD7F0" android:pathData="M35,82 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0 Z"/>
+    <path android:fillColor="#7AD7F0" android:pathData="M53,87 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0 Z"/>
+    <path android:fillColor="#7AD7F0" android:pathData="M71,82 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0 Z"/>
 </vector>
