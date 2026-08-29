@@ -4,9 +4,30 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- 鲸鱼身体 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M28,60 C28,50 38,42 52,42 C70,42 82,50 82,60 C82,68 72,74 56,74 C42,74 30,68 28,60 Z"/>
+    <!-- 尾巴（红色点缀） -->
     <path
         android:fillColor="#E94560"
-        android:pathData="M54,40L54,68M40,54L68,54"
-        android:strokeWidth="4"
-        android:strokeColor="#E94560"/>
+        android:pathData="M80,54 C84,47 90,44 95,46 C98,48 94,55 90,58 C86,62 82,60 80,56 Z"/>
+    <!-- 眼睛 -->
+    <path
+        android:fillColor="#0F3460"
+        android:pathData="M48,52 C48,50 50,48 52,48 C54,48 56,50 56,52 C56,54 54,56 52,56 C50,56 48,54 48,52 Z"/>
+    <!-- 鳍 -->
+    <path
+        android:fillColor="#E94560"
+        android:pathData="M44,62 C48,57 56,57 62,62 C56,66 50,66 44,62 Z"/>
+    <!-- 底部水花/网络点 -->
+    <path
+        android:fillColor="#7AD7F0"
+        android:pathData="M36,78 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 Z"/>
+    <path
+        android:fillColor="#7AD7F0"
+        android:pathData="M52,80 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 Z"/>
+    <path
+        android:fillColor="#7AD7F0"
+        android:pathData="M68,78 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 Z"/>
 </vector>
