@@ -22,7 +22,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
-import android.widget.CheckBox
+import android.widget.Switch
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -408,13 +408,14 @@ class MainActivity : Activity() {
             try { JSONObject(it) } catch (_: Exception) { null }
         }
         card.addView(label("SSH 隧道"), rowParams(top = dp(14)))
-        val sshToggle = CheckBox(this).apply {
+        val sshToggle = Switch(this).apply {
             text = "启用 SSH"
             setTextColor(COL_TEXT)
-            buttonTintList = ColorStateList.valueOf(COL_ACCENT)
+            thumbTintList = ColorStateList.valueOf(COL_ACCENT)
+            trackTintList = ColorStateList.valueOf(0x33FFFFFF.toInt())
             isChecked = prefs.getBoolean(PREF_SSH_ENABLED, false)
         }
-        card.addView(sshToggle, rowParams(top = dp(4)))
+        card.addView(sshToggle, rowParams(top = dp(6)))
 
         val sshHostInput = input("SSH 主机", savedSsh?.optString("sshHost") ?: "")
         val sshPortInput = input("SSH 端口", savedSsh?.optString("sshPort") ?: "22")
