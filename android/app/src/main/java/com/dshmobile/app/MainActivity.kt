@@ -83,6 +83,9 @@ class MainActivity : Activity() {
         const val REQ_PICK_KEY = 2001
 
         const val PREF_SSH_ENABLED = "ssh_enabled" // 上次是否通过 SSH 隧道连接
+        const val PREF_SERVER_PROTO = "server_proto" // 用户填写的 dsh web 协议
+        const val PREF_SERVER_HOST = "server_host"  // 用户填写的 dsh web 主机（非隧道本地随机端口）
+        const val PREF_SERVER_PORT = "server_port"  // 用户填写的 dsh web 端口（远程/隧道目标端口）
 
         // dsh 前端 RPC 依赖 crypto.randomUUID；WebView 在局域网明文 HTTP
         //（非安全上下文）下访问不到该 API，会导致全部 RPC 失败（白屏）。
@@ -349,13 +352,26 @@ class MainActivity : Activity() {
 
         card.addView(label("服务器地址"), rowParams(top = dp(24)))
 
-        // 协议分段
+        // 协议分段：优先使用独立保存的服务器信息，避免被 SSH 随机本地端口覆盖
         val savedUrl = prefs.getString("url", null)
-        var prefillProto = "http"; var prefillHost = ""; var prefillPort = DEFAULT_PORT
-        savedUrl?.let {
-            Regex("^(https?)://([^:]+)(?::(\\d+))?$").find(it.trim())?.let { m ->
-                prefillProto = m.groupValues[1]; prefillHost = m.groupValues[2]
-                if (m.groupValues[3].isNotEmpty()) prefillPort = m.groupValues[3]
+        val savedSshForServer = prefs.getString("ssh_json", null)?.let {
+            try { JSONObject(it) } catch (_: Exception) { null }
+        }
+        var prefillProto = prefs.getString(PREF_SERVER_PROTO, "http") ?: "http"
+        var prefillHost = prefs.getString(PREF_SERVER_HOST, "") ?: ""
+        var prefillPort = prefs.getString(PREF_SERVER_PORT, DEFAULT_PORT) ?: DEFAULT_PORT
+        if (prefillHost.isBlank()) {
+            // 老版本/首次升级：从旧的完整 URL 反向解析
+            savedUrl?.let {
+                Regex("^(https?)://([^:]+)(?::(\\d+))?$").find(it.trim())?.let { m ->
+                    prefillProto = m.groupValues[1]; prefillHost = m.groupValues[2]
+                    if (m.groupValues[3].isNotEmpty()) prefillPort = m.groupValues[3]
+                }
+            }
+            // 如果是 SSH 留下的 127.0.0.1:随机端口，就换成稳定的隧道目标端口
+            if (prefillHost == "127.0.0.1") {
+                prefillHost = savedSshForServer?.optString("remoteHost") ?: prefillHost
+                prefillPort = (savedSshForServer?.optInt("remotePort", DEFAULT_PORT.toInt()) ?: DEFAULT_PORT.toInt()).toString()
             }
         }
         val httpBtn = segment("http", prefillProto != "https")
@@ -491,6 +507,11 @@ class MainActivity : Activity() {
                     val host = hostInput.text.toString().trim()
                     if (host.isBlank()) { status("host 不能为空"); return@setOnClickListener }
                     val proto = if (protocolGroup.checkedRadioButtonId == httpsBtn.id) "https" else "http"
+                    prefs.edit()
+                        .putString(PREF_SERVER_PROTO, proto)
+                        .putString(PREF_SERVER_HOST, host)
+                        .putString(PREF_SERVER_PORT, remotePort.toString())
+                        .apply()
                     val url = "$proto://$host:$remotePort"
                     connectWeb(url)
                 }
@@ -565,6 +586,11 @@ class MainActivity : Activity() {
             runOnUiThread {
                 if (base == null) { tunnel.close(); status("隧道建立失败（检查 SSH 主机/端口/用户/认证）"); return@runOnUiThread }
                 persistSshConfig(sshHost, sshPort, sshUser, remotePort, auth)
+                prefs.edit()
+                    .putString(PREF_SERVER_PROTO, "http")
+                    .putString(PREF_SERVER_HOST, "127.0.0.1")
+                    .putString(PREF_SERVER_PORT, remotePort.toString())
+                    .apply()
                 app.sshTunnel = tunnel
                 connectWeb(base)
             }
