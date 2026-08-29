@@ -3,7 +3,6 @@ package com.dshmobile.app
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
-import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
@@ -26,23 +25,21 @@ import android.widget.RadioGroup
 import android.widget.TextView
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
-import com.dshmobile.protocol.DshClient
 import com.dshmobile.protocol.SshTunnel
 import org.json.JSONObject
 
 /**
- * dsh-mobile 连接屏 —— 双模式：
+ * dsh-mobile 连接屏 —— 纯 WebView 版：
  *
- *  ◆ 完整网页（默认）：全屏 WebView 加载 dsh web 前端，功能与桌面 100% 一致
- *    （Markdown/代码高亮/设置页……），自带：
- *      - crypto.randomUUID 文档启动注入（局域网明文 HTTP 防白屏，与 dsh-lan-access 幂等同款）
- *      - Basic Auth 弹窗（隧道/反代场景）
- *      - 错误页（重试 / 换服务器），retainedWebView 跨重建保活
+ *  全屏 WebView 加载 dsh web 前端，功能与桌面 100% 一致
+ *  （Markdown/代码高亮/设置页……），自带：
+ *    - crypto.randomUUID 文档启动注入（局域网明文 HTTP 防白屏，与 dsh-lan-access 幂等同款）
+ *    - Basic Auth 弹窗（隧道/反代场景）
+ *    - 错误页（重试 / 换服务器），retainedWebView 跨重建保活
  *
- *  ◆ 原生简版：内置协议客户端（/api RPC + 双 WebSocket downlink），轻量遥控
- *
- *  ◆ SSH 隧道（两种模式可用）：经 sshd 本地端口转发访问，服务端视角为回环，
- *    配置平面（settings/credentials/…）全解锁 —— 官方文档认可的合规远程路径。
+ *  SSH 隧道可选：经 sshd 本地端口转发访问，服务端视角为回环，
+ *  配置平面（settings/credentials/…）全解锁 —— 官方文档认可的合规远程路径。
+ *  SSH 配置持久化，App 重启自动恢复；断线重连后 WebView 自动跟随新端口。
  */
 class MainActivity : Activity() {
     private var webView: WebView? = null
@@ -65,7 +62,6 @@ class MainActivity : Activity() {
         const val UA_MARKER = "DshMobile/1.0"
         const val DEFAULT_PORT = "3080"
 
-        const val PREF_MODE = "mode" // "web" | "native"
         const val PREF_SSH_ENABLED = "ssh_enabled" // 上次是否通过 SSH 隧道连接
 
         // dsh 前端 RPC 依赖 crypto.randomUUID；WebView 在局域网明文 HTTP
@@ -147,10 +143,9 @@ class MainActivity : Activity() {
         setContentView(root)
         applyImmersive()
 
-        // 自动连接（web + SSH 优先）：上次模式带 SSH 的先恢复隧道，再加载本地回环 URL。
+        // 自动连接（纯 WebView + SSH 优先）：上次带 SSH 的先恢复隧道，再加载本地回环 URL。
         // 直连模式仍直接加载保存的 URL，避免每次启动重新输入。
         val savedUrl = prefs.getString("url", null)
-        val savedMode = prefs.getString(PREF_MODE, "web") ?: "web"
         val currentUrl = webView?.url
         val baseMatch = savedUrl != null && currentUrl != null &&
             currentUrl.trimEnd('/').startsWith(savedUrl.trimEnd('/'))
@@ -159,7 +154,7 @@ class MainActivity : Activity() {
         val savedIsSshLoopback = savedUrl?.startsWith("http://127.0.0.1:") == true
         val sshSaved = prefs.getString("ssh_json", null) != null &&
             (prefs.getBoolean(PREF_SSH_ENABLED, false) || savedIsSshLoopback)
-        if (savedMode == "web" && savedUrl != null && !baseMatch) {
+        if (savedUrl != null && !baseMatch) {
             if (sshSaved) {
                 autoConnectSsh(savedUrl)
             } else {
@@ -167,7 +162,7 @@ class MainActivity : Activity() {
                 lastUrl = savedUrl
                 webView?.loadUrl(savedUrl)
             }
-        } else if (savedMode == "web" && !currentUrl.isNullOrBlank()) {
+        } else if (!currentUrl.isNullOrBlank()) {
             connectView?.visibility = View.GONE
         }
     }
@@ -248,13 +243,6 @@ class MainActivity : Activity() {
             text = "Connect to DeepSeek Harness on your computer"; textSize = 14f; setTextColor(COL_MUTED)
         }, rowParams(top = dp(8)))
 
-        // 模式选择：完整网页（默认）/ 原生简版
-        val webBtn = RadioButton(this).apply { id = View.generateViewId(); text = "完整网页（桌面全功能）"; setTextColor(COL_TEXT) }
-        val nativeBtn = RadioButton(this).apply { id = View.generateViewId(); text = "原生简版（轻量遥控）"; setTextColor(COL_TEXT) }
-        val modeGroup = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL; addView(webBtn); addView(nativeBtn) }
-        column.addView(modeGroup, rowParams(top = dp(12), width = dp(300)))
-        modeGroup.check(if ((prefs.getString(PREF_MODE, "web") ?: "web") == "native") nativeBtn.id else webBtn.id)
-
         // SSH 隧道开关
         val sshToggle = android.widget.CheckBox(this).apply {
             text = "SSH 隧道（解锁设置/凭据等本机限制接口）"; setTextColor(COL_MUTED)
@@ -326,31 +314,29 @@ class MainActivity : Activity() {
             text = "Connect"; setTextColor(COL_TEXT); setBackgroundColor(COL_ACCENT)
             setOnClickListener {
                 val useSsh = sshToggle.isChecked
-                val mode = if (modeGroup.checkedRadioButtonId == nativeBtn.id) "native" else "web"
-                prefs.edit().putString(PREF_MODE, mode).apply()
+                prefs.edit().putBoolean(PREF_SSH_ENABLED, useSsh).apply()
 
                 val remotePort = portInput.text.toString().trim().ifEmpty { DEFAULT_PORT }.toIntOrNull() ?: 3080
-                prefs.edit().putBoolean(PREF_SSH_ENABLED, useSsh).apply()
                 if (useSsh) {
                     val sh = sshHostInput.text.toString().trim()
                     val su = sshUserInput.text.toString().trim()
                     val sp = sshPassInput.text.toString()
                     val sport = sshPortInput.text.toString().trim().toIntOrNull() ?: 22
                     if (sh.isBlank() || su.isBlank()) { status("SSH 主机/用户名不能为空"); return@setOnClickListener }
-                    connectViaSsh(sh, sport, su, remotePort, sp, mode)
+                    connectViaSsh(sh, sport, su, remotePort, sp)
                 } else {
                     val host = hostInput.text.toString().trim()
                     if (host.isBlank()) { status("host 不能为空"); return@setOnClickListener }
                     val proto = if (protocolGroup.checkedRadioButtonId == httpsBtn.id) "https" else "http"
                     val url = "$proto://$host:$remotePort"
-                    if (mode == "native") connectNative(url) else connectWeb(url)
+                    connectWeb(url)
                 }
             }
         }, rowParams(top = dp(8), height = dp(48), width = dp(300)))
 
         column.addView(statusView, rowParams(top = dp(12)))
         column.addView(TextView(this).apply {
-            text = "完整网页=桌面级功能 · 原生简版=轻量遥控 · SSH=解锁本机接口"
+            text = "完整网页=桌面级功能 · SSH=解锁设置/凭据等本机接口"
             textSize = 11f; setTextColor(COL_DIM); gravity = Gravity.CENTER
         }, rowParams(top = dp(20)))
         return wrapper
@@ -358,7 +344,7 @@ class MainActivity : Activity() {
 
     private fun status(msg: String) { statusView?.text = msg }
 
-    // ── 模式 1：WebView 直连 ──────────────────────────────────
+    // ── WebView 直连 ─────────────────────────────────────────
     private fun connectWeb(url: String) {
         status("连接中… $url")
         connectView?.visibility = View.GONE
@@ -367,30 +353,8 @@ class MainActivity : Activity() {
         webView?.loadUrl(url)
     }
 
-    // ── 模式 2：原生协议客户端 ────────────────────────────────
-    private fun connectNative(baseUrl: String) {
-        status("连接中… $baseUrl")
-        val app = application as DshApp
-        val dsh = DshClient(baseUrl)
-        app.client = dsh
-        Thread {
-            val desc = dsh.hostDescribe()
-            runOnUiThread {
-                if (desc.isOk) {
-                    prefs.edit().putString("url", baseUrl).apply()
-                    status("已连接，打开会话…")
-                    Thread { dsh.start() }.start()
-                    startActivity(Intent(this, ConversationActivity::class.java))
-                } else {
-                    val err = (desc as? com.dshmobile.protocol.Rpc.Result.Err)?.error?.display ?: "连接失败"
-                    status(err)
-                }
-            }
-        }.start()
-    }
-
-    // ── SSH 隧道（两种模式共用）───────────────────────────────
-    private fun connectViaSsh(sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, password: String, mode: String) {
+    // ── SSH 隧道（纯 WebView 用）─────────────────────────────
+    private fun connectViaSsh(sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, password: String) {
         status("SSH 隧道建立中… $sshUser@$sshHost")
         val app = application as DshApp
         Thread {
@@ -409,7 +373,7 @@ class MainActivity : Activity() {
                 if (base == null) { tunnel.close(); status("隧道建立失败（检查 SSH 主机/端口/用户/密码）"); return@runOnUiThread }
                 persistSshConfig(sshHost, sshPort, sshUser, remotePort, password)
                 app.sshTunnel = tunnel
-                if (mode == "native") connectNative(base) else connectWeb(base)
+                connectWeb(base)
             }
         }.start()
     }

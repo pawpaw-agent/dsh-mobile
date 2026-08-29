@@ -1,7 +1,9 @@
-# DeepSeek Harness (DSH) 浏览器线上协议 — 原生逆向规格
+# DeepSeek Harness (DSH) 浏览器线上协议 — 逆向规格
 
 > **来源**：`dsh-client-connection@…/lib/client.js`（编译后 bundle），DSH 版本 `0.1.1-rc.2`。
-> 目的：为**原生 Kotlin Android 客户端**（不用 WebView）复刻 DSH 的线上传输层提供可实现的协议规格。
+> 目的：为 dsh-mobile 的**后台协议客户端**（`AgentMonitorService`，仅任务完成通知）
+> 以及需要自行实现 DSH 线上传输层的场景提供可实现的协议规格。
+> App 主界面已经是 WebView，不依赖此协议做任何业务 UI。
 > 结论先行：DSH 的浏览器端协议**不是 REST**，而是「HTTP POST（unary/respond）+ WebSocket（downlink 事件流）」之上的一层 **RPC envelope**，外层是四成员判别联合。
 
 ---
@@ -289,8 +291,8 @@ internal             {}
 4. **envelope 解析**：外层 `type` 四象限；`result.ok ? value : error`。value 按 §3 的 schema 解析成 Kotlin 数据类。
 5. **两个 WebSocket**：`GET/upgrade` 到 `/api/events.mux`、`/api/events.host`（downlink-only，客户端不发数据）。每帧 JSON 解析为 `server-request` 后按 `payload.type` 分发到 MuxFrame/HostFrame。
 6. **就绪握手**：连接后并行开两流 + `host.describe`，全成才 `connected`；失败按指数退避重连。
-7. **浏览器身份**：WebSocket 握手带 `Origin`（`sec-fetch-site`）。原生客户端是「非浏览器客户端」，需以回环 authority、LAN IP 字面量或 `trustedHosts` 授权通过 `/api` 信任栅栏。**配置平面接口远程必 403** —— 除非走 SSH 端口转发。
-8. **crypto.randomUUID**：原生客户端无需浏览器 polyfill；这是 WebView 场景才需要。
+7. **浏览器身份**：WebSocket 握手带 `Origin`（`sec-fetch-site`）。非浏览器客户端（如后台 `DshClient`）需以回环 authority、LAN IP 字面量或 `trustedHosts` 授权通过 `/api` 信任栅栏。**配置平面接口远程必 403** —— 除非走 SSH 端口转发。
+8. **crypto.randomUUID**：WebView 加载局域网明文 HTTP 时需要浏览器 polyfill；非浏览器协议客户端不需要。
 9. **附件**：`session.attachment` 返回 base64 `data`；`session.prompt` 的 image part 传 base64。需注意服务端 `maxRequestBodyBytes`（默认 300 MiB，含图片 base64 膨胀后）。
 10. **会话重建**：`session.history` 返回 events + projections；客户端用 `SessionEvent.surfaceOp`（append / replace）重建 message surface。事件有 `seq` 连续性校验。
 

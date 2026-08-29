@@ -35,27 +35,6 @@
                 android:value="Listen for DeepSeek Harness agent completion over the app's own protocol connection" />
         </service>
 
-        <activity
-            android:name=".ConversationActivity"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
-            android:windowSoftInputMode="adjustResize" />
-
-        <activity
-            android:name=".WorkspaceActivity"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
-            android:windowSoftInputMode="adjustResize" />
-
-        <activity
-            android:name=".ConfigActivity"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
-            android:windowSoftInputMode="adjustResize" />
-
     </application>
 
 </manifest>

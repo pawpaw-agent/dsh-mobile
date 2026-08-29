@@ -20,7 +20,7 @@ import org.json.JSONObject
  * 监听 DSH 的 host 级广播帧 `/api/events.host` → `host/session-status`：
  * running=true→false 边沿 = 某个会话的任务跑完 → 拉一次 session.list 取标题 → 推通知。
  *
- * 与 UI 模式无关（WebView / 原生都能用）：服务持有自己的轻量 [DshClient] 实例，
+ * 纯 WebView 版也使用：服务持有自己的轻量 [DshClient] 实例，
  * 只消费 host downlink。App 回前台即停服务，避免与页面重复耗电。
  *
  * 权限：POST_NOTIFICATIONS（Android 13+ 运行时申请）、FOREGROUND_SERVICE、

@@ -1,18 +1,17 @@
 # dsh-mobile
 
-**手机端使用 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）的双模式 Android 客户端。**
+**手机端使用 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）的纯 WebView Android 客户端。**
 
-连接运行在你笔记本 / VPS 上的 `dsh --profile web`，连接屏可选：
+连接运行在你笔记本 / VPS 上的 `dsh --profile web`：
 
-- **完整网页（默认）** — 全屏 WebView 加载 dsh web 前端，功能与桌面 100% 一致（Markdown / 代码高亮 / 设置页 / 会话树……）。内置 `crypto.randomUUID` 文档启动注入（局域网明文 HTTP 防白屏）、Basic Auth 弹窗、错误重试页、WebView 跨重建保活。
-- **原生简版** — 内置协议客户端（`/api` RPC + `/api/events.mux`、`/api/events.host` 双 WebSocket downlink），轻量遥控：会话、对话、实时流式、模型选择、工具审批、任务进度。协议细节见 [`docs/dsh-protocol.md`](docs/dsh-protocol.md)，架构见 [`docs/native-client.md`](docs/native-client.md)。
-- **SSH 隧道（两种模式通用）** — 内置 JSch 本地端口转发，服务端视角为回环，**解锁设置/凭据等本机限制接口**（官方认可的合规远程完整方案），无需 `dsh-lan-access` 插件、无需 `--host 0.0.0.0`；支持密码登录、私钥登录（含口令），SSH 断线自动重连，App 重启后自动重建隧道。
+- **完整网页（默认，也是唯一界面）** — 全屏 WebView 加载 dsh web 前端，功能与桌面 100% 一致（Markdown / 代码高亮 / 设置页 / 会话树……）。内置 `crypto.randomUUID` 文档启动注入（局域网明文 HTTP 防白屏）、Basic Auth 弹窗、错误重试页、WebView 跨重建保活。
+- **SSH 隧道** — 内置 JSch 本地端口转发，服务端视角为回环，**解锁设置/凭据等本机限制接口**（官方认可的合规远程完整方案），无需 `dsh-lan-access` 插件、无需 `--host 0.0.0.0`；支持密码登录、私钥登录（含口令），SSH 断线自动重连，App 重启后自动重建隧道。
 
 ```
 ┌─────────────────────────────┐
 │        dsh-mobile           │
-│  完整网页(WebView，默认) 或   │
-│  原生简版(RPC+WS 事件流)     │
+│     完整网页(WebView)       │
+│   SSH 隧道 / 局域网直连      │
 └──────────────┬──────────────┘
                │  http://<host>:3080
                │  局域网 / Tailscale / 隧道 / SSH 转发
@@ -35,24 +34,13 @@
 
 ## 功能
 
-- **连接屏** — 输入 host:port + 选择 http/https 协议即可连接 dsh web，默认端口 `3080`；连接前做一次 `host.describe` 就绪握手；SSH 隧道配置持久化，App 重启自动恢复
-- **会话列表与打开** — `session.list` / `session.history`，展示最近会话并可进入
-- **对话发送** — `session.prompt`（queue / steer），等待 agent 响应
-- **实时流式渲染** — `/api/events.mux` 的 `session/event` → `assistant/chunk`，按 content-block index 分块渲染（text 与 tool-call 分属不同 block，`block-end` 以服务端完整文本落定）
-- **模型选择** — 顶栏「模型」按钮，`session.models` 拉取分组模型列表，`session.selectModel` 切换
-- **工具审批** — `approval/requested` 弹出「允许一次 / 拒绝」，`/api/respond` 回 `client-response`
-- **用户提问** — `question/requested` 接入 `respondQuestion`
-- **任务/进度** — `session/jobs` 渲染 TaskView 列表
-- **队列状态** — `session/queue` 实时展示待发送/插话队列
-- **会话管理** — 搜索、重命名、Fork、Agent Preset 选择
-- **子代理** — 查看子代理列表、历史，继续提示、打断
-- **技能列表** — 查看当前会话可用的 DSH Skills
-- **工作区管理** — 工作区列表、新建、重命名、删除，打开工作区内会话
-- **配置管理** — 模型列表、模型提供方、设置命名空间、凭据、Agent Preset 的查看/编辑
-- **明文 HTTP 支持** — `usesCleartextTraffic="true"`，局域网直连（原生客户端无需浏览器 polyfill/窄屏适配）
-- **`DshClient` 断线重连** — 就绪握手失败按指数退避重连（base 500ms、倍率 2、上限 10s + 抖动）
+- **连接屏** — 输入 host:port + 选择 http/https 协议即可连接 dsh web，默认端口 `3080`；SSH 隧道配置持久化，App 重启自动恢复
+- **完整网页** — 所有功能（会话、对话、Markdown/代码高亮、设置页、模型、凭据、工作区等）均由 dsh 官方 Web 前端提供，与桌面端一致
+- **SSH 自动恢复** — SSH 隧道配置持久化；App 重启自动重建，断线重连后 WebView 自动跟随新端口
+- **SSH 完成通知** — App 退后台时通过同一 SSH 隧道监听 Agent 完成事件，完成后推通知；回前台自动停止
+- **明文 HTTP 支持** — `usesCleartextTraffic="true"`，支持局域网直连、Tailscale、反向代理、SSH 本地转发
 
-> 协议层（`com.dshmobile.protocol`）还实现了 `workspace.*`、`subagent.*`、`llm.*`、`settings.*`、`credentials.*`、`goal.*` 等方法目录；其中原生 UI 已接入工作区、子代理、配置/模型/凭据/Agent Preset 等主要能力。
+> 后台通知服务（`AgentMonitorService`）内部仍使用轻量协议客户端 `DshClient` 监听 `host/session-status`，但 App 界面不包含任何原生业务页面。
 
 ---
 
@@ -89,7 +77,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 - **Host** — 笔记本的局域网 IP（如 `192.168.1.100`）或 Tailscale IP（如 `100.x.x.x`）或隧道域名
 - **Port** — dsh web 端口，默认 `3080`
 
-点 **Connect**，App 做 `host.describe` 就绪握手后进入原生会话页，开始使用。
+点 **Connect**，App 加载 dsh Web 前端，开始使用。
 
 ---
 
@@ -133,12 +121,9 @@ dsh-mobile/
 │   │   ├── src/main/
 │   │   │   ├── java/com/dshmobile/
 │   │   │   │   ├── app/
-│   │   │   │   │   ├── MainActivity.kt          # 连接屏（host:port → DshClient 就绪握手）
-│   │   │   │   │   ├── ConversationActivity.kt  # 原生会话/对话/流式/审批/模型选择/子代理
-│   │   │   │   │   ├── WorkspaceActivity.kt     # 工作区管理
-│   │   │   │   │   ├── ConfigActivity.kt        # 配置/模型/凭据/Preset 管理
+│   │   │   │   │   ├── MainActivity.kt          # 连接屏/WebView 壳 + SSH 隧道
 │   │   │   │   │   ├── AgentMonitorService.kt   # 后台 Agent 完成通知服务
-│   │   │   │   │   └── DshApp.kt                # Application 单例：持有进程级 DshClient
+│   │   │   │   │   └── DshApp.kt                # Application：持有 WebView / SSH 隧道
 │   │   │   │   └── protocol/
 │   │   │   │       ├── Rpc.kt                   # 四象限 RPC envelope + 错误体
 │   │   │   │       ├── DshClient.kt             # HTTP RPC + 双 WebSocket + 方法目录 + respond
@@ -154,7 +139,7 @@ dsh-mobile/
 │   └── build-apk.sh                     # 封装 gradle assembleDebug
 ├── docs/
 │   ├── dsh-protocol.md                  # 逆向的 DSH 线上协议规格
-│   └── native-client.md                 # 原生客户端架构
+│   └── native-client.md                 # 后台协议客户端/SSH 架构（仅用于完成通知）
 ├── package.json
 └── README.md
 ```

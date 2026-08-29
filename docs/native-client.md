@@ -1,27 +1,27 @@
-# dsh-mobile 原生客户端架构
+# dsh-mobile 后台协议与 SSH 架构
 
-> 本文档描述 dsh-mobile 的**原生（非 WebView）**客户端架构，对照 `docs/dsh-protocol.md` 的协议规格。
-> native 客户端通过直接实现 DSH 的线上协议（HTTP RPC + 双 WebSocket downlink）与 `dsh web` 通信。
+> 本文档描述 dsh-mobile 的后台/连接层架构。**App 界面已经是纯 WebView**（只显示 dsh 官方 Web 前端）；
+> 协议客户端 `DshClient` 不再提供任何原生业务页面，仅用于 `AgentMonitorService` 的后台完成通知
+> （监听 `host/session-status`），以及 `SshTunnel` 提供 SSH 本地端口转发。
+> 协议规格见 `docs/dsh-protocol.md`。
 
-## 为什么是原生而非 WebView
+## 为什么保留一个轻量协议客户端
 
-原生客户端**不依赖浏览器内核**，直接实现 DSH 的线上协议：
-- **unary RPC**：`POST /api/<method>`，body 为 `client-request` JSON，校验 `rpcId` 回显。
-- **事件流**：`/api/events.mux` + `/api/events.host` 两个 downlink-only WebSocket（每帧一个 `server-request` JSON）。
-
-相比之下 WebView 方案通过 `dsh-lan-access` 注入 `crypto.randomUUID` polyfill + 窄屏适配，原生客户端则**完全不需要**这些。
+- **WebView 界面**：由 dsh web 前端负责全部功能，App 不重复实现。
+- **后台通知**：App 退后台后，`AgentMonitorService` 需要一个不依赖浏览器页面的通道来监听 Agent 完成事件，
+  因此直接实现 DSH 协议的两个 downlink WebSocket + unary RPC：
+  - **unary RPC**：`POST /api/<method>`，body 为 `client-request` JSON，校验 `rpcId` 回显。
+  - **事件流**：`/api/events.mux` + `/api/events.host` 两个 downlink-only WebSocket（每帧一个 `server-request` JSON）。
+- **SSH 隧道**：`SshTunnel`（JSch）通过本地端口转发让 WebView/后台服务都能以回环身份访问配置平面。
 
 ## 模块结构
 
 ```
 com.dshmobile/
 ├── app/
-│   ├── DshApp.kt              # Application 单例：持有进程级 DshClient
-│   ├── MainActivity.kt        # 连接屏（host:port/protocol → create+start DshClient → 就绪握手 → 会话页）
-│   ├── ConversationActivity.kt # 会话列表 + 打开会话 + 发送 prompt + 实时流式 + 审批 + 模型选择 + 子代理
-│   ├── WorkspaceActivity.kt    # 工作区列表/新建/重命名/删除/打开会话
-│   ├── ConfigActivity.kt       # 模型/提供方/设置/凭据/Agent Preset 管理
-│   └── AgentMonitorService.kt  # 后台 Agent 完成通知
+│   ├── DshApp.kt              # Application 单例：持有 WebView 与 SshTunnel
+│   ├── MainActivity.kt        # 连接屏 + WebView 壳 + SSH 隧道（纯 WebView，无原生业务页）
+│   └── AgentMonitorService.kt # 后台 Agent 完成通知（使用 DshClient + 可选 SshTunnel）
 └── protocol/
     ├── Rpc.kt                 # 四象限 RPC envelope + 判别错误体 + 解析/构造
     ├── DshClient.kt           # HTTP POST /api unary + 双 WebSocket downlink + 就绪握手/重连 + 方法目录 + respond
@@ -31,20 +31,14 @@ com.dshmobile/
 ## 数据流
 
 ```
-[MainActivity]  connect(host:port) -> new DshClient(baseUrl).hostDescribe()  就绪
-        | 成功
+[MainActivity]  connect(host:port / SSH) -> WebView.loadUrl(dsh web)
+        |  用户所有交互由 dsh web 前端完成
         v
-[ConversationActivity]  -> sessionList() / sessionHistory(sid)
-        |                   openSession(sid)
-        v
-    DshClient.start()  -> open /api/events.mux + /api/events.host
+[AgentMonitorService] (退后台后)
+        DshClient.start()  -> open /api/events.mux + /api/events.host
         |                   downlink frames (envelope rpcId, payload)
         v
-    渲染: session/event -> handleEvent (assistant/chunk 按 content-block index 分块:
-          block-start → text-delta… → block-end(以完整文本落定)，text 与 tool-call 各一个 block)
-          approval/requested -> respondApproval(rpcId, sessionId, approvalId, approve)
-          question/requested -> respondQuestion(rpcId, cancelled)
-          session/jobs -> renderJobs
+    host/session-status running=true→false -> notifyDone() 推送完成通知
 ```
 
 ## 就绪握手 & 重连
@@ -60,32 +54,17 @@ com.dshmobile/
 - 远程合规方案：SSH 端口转发 `ssh -L 3080:127.0.0.1:3080 用户@电脑IP`，客户端填 `http://127.0.0.1:3080`（从服务端视角仍是回环）。
 - App 内置 `SshTunnel`（JSch）实现同样的本地端口转发，支持密码/私钥认证、断线自动重连；WebView 模式下 App 重启后会自动重建隧道并重新加载新端口。
 
-## 已实现的核心交互
+## 已实现的核心交互（App 内可见功能都由 WebView 承担）
 
-| 交互 | 协议方法 | 状态 |
+| 交互 | 实现方式 | 状态 |
 |---|---|---|
-| 连接/就绪 | host.describe | ✅ |
-| 会话列表 | session.list | ✅ |
-| 打开会话/历史 | session.history | ✅ |
-| 发送消息 | session.prompt (queue/steer) | ✅ |
-| 实时流式 | /api/events.mux → assistant/chunk | ✅ |
-| 模型选择 | session.models / session.selectModel | ✅ |
-| 工具审批 | approval/requested → respondApproval | ✅ |
-| 用户提问 | question/requested → respondQuestion | ✅ |
-| 任务/进度 | session/jobs → renderJobs | ✅ |
-| 队列状态 | session/queue → renderQueue | ✅ |
-| 会话搜索 | session.search | ✅ |
-| 会话重命名 / fork | session.rename / session.fork | ✅ |
-| Agent Preset 选择 | agentPreset.list / agentPreset.select | ✅ |
-| 技能列表 | skill.list | ✅ |
-| 工作区管理 | workspace.list/create/rename/delete + host.* | ✅ |
-| 子代理 | subagent.list/history/prompt/interrupt | ✅ |
-| 模型 / 提供方 | llm.models / llm.providers | ✅ |
-| 设置 / 凭据 | settings.* / credentials.* | ✅（需 SSH 回环） |
-| 全局状态 | /api/events.host | 部分：session-status/session-added/session-removed/agent-error，自动刷新会话缓存 |
+| 全部会话/对话/Markdown/设置页 | dsh Web 前端（WebView） | ✅ |
+| SSH 隧道/自动重连 | SshTunnel + MainActivity | ✅ |
+| 连接/就绪 | 主界面 WebView；后台服务用 host.describe | ✅ |
+| 后台完成通知 | DshClient + /api/events.host | ✅ |
 
 ## 说明
 
-- 所有网络调用在后台线程执行（`Thread { ... }`），UI 通过 `Handler(Looper.getMainLooper())` 回主线程刷新。
-- 事件流回调带 `(envelope rpcId, payload)`，`rpcId` 用于应答 `server-request`（审批/提问）。
+- 后台服务的所有网络调用在后台线程执行（`Thread { ... }`）。
+- 事件流回调带 `(envelope rpcId, payload)`，`rpcId` 用于应答 `server-request`（审批/提问，后台通知目前只消费 host 状态）。
 - 依赖 OkHttp（`com.squareup.okhttp3:okhttp:4.12.0`）、JSch（`com.github.mwiede:jsch:0.2.21`，仅 SSH 隧道用）；JSON 用 Android 内置 `org.json`，无额外序列化库。
