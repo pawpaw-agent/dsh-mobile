@@ -358,8 +358,8 @@ class MainActivity : Activity() {
                 if (m.groupValues[3].isNotEmpty()) prefillPort = m.groupValues[3]
             }
         }
-        val httpBtn = segment("HTTP", prefillProto != "https")
-        val httpsBtn = segment("HTTPS", prefillProto == "https")
+        val httpBtn = segment("http", prefillProto != "https")
+        val httpsBtn = segment("https", prefillProto == "https")
         val protocolGroup = RadioGroup(this).apply {
             orientation = RadioGroup.HORIZONTAL
             addView(httpBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
