@@ -90,6 +90,22 @@ class MainActivity : Activity() {
         // dsh 前端 RPC 依赖 crypto.randomUUID；WebView 在局域网明文 HTTP
         //（非安全上下文）下访问不到该 API，会导致全部 RPC 失败（白屏）。
         // 标准 UUID v4 polyfill（幂等）：与 dsh-lan-access 插件的兜底一致。
+        // 注入移动端视口/安全区样式：让 dsh web 前端严格贴满屏幕，避免上下超出。
+        val MOBILE_VIEWPORT_CSS = """
+            (function(){
+              try {
+                var style = document.createElement('style');
+                style.textContent = `
+                  html, body, #root { height: 100dvh !important; min-height: 100dvh !important; }
+                  html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !important; }
+                  [data-slot="conversation"], [data-slot="sidebar"] { height: 100dvh !important; }
+                  body { padding-bottom: 0 !important; }
+                `;
+                (document.head || document.documentElement).appendChild(style);
+              } catch(e) {}
+            })();
+        """.trimIndent()
+
         val CRYPTO_POLYFILL = """ // trimIndent 非编译期常量，故用 val
             (function(){
               try {
@@ -137,6 +153,7 @@ class MainActivity : Activity() {
             }
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 WebViewCompat.addDocumentStartJavaScript(this, CRYPTO_POLYFILL, setOf("*"))
+                WebViewCompat.addDocumentStartJavaScript(this, MOBILE_VIEWPORT_CSS, setOf("*"))
             }
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) { hideErrorPage() }
