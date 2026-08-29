@@ -318,7 +318,7 @@ class MainActivity : Activity() {
             RadioButton(this).apply {
                 id = View.generateViewId()
                 this.text = text
-                textSize = 13f
+                textSize = 12f
                 isChecked = initial
                 buttonDrawable = null
                 gravity = Gravity.CENTER
@@ -326,7 +326,9 @@ class MainActivity : Activity() {
                 setSingleLine(true)
                 setMinWidth(0)
                 setMinimumWidth(0)
-                setPadding(dp(8), dp(10), dp(8), dp(10))
+                setMinEms(0)
+                setMaxEms(5)
+                setPadding(dp(4), dp(10), dp(4), dp(10))
                 setBackgroundResource(R.drawable.bg_segment)
                 setTextColor(if (initial) COL_ACCENT_TEXT else COL_TEXT)
                 setOnCheckedChangeListener { _, checked ->
