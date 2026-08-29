@@ -279,7 +279,7 @@ class MainActivity : Activity() {
         val outer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(20), dp(36), dp(20), dp(36))
+            setPadding(dp(16), dp(14), dp(16), dp(14))
         }
         scroll.addView(outer, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -288,14 +288,14 @@ class MainActivity : Activity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundResource(R.drawable.bg_card)
-            setPadding(dp(26), dp(30), dp(26), dp(26))
-            layoutParams = LinearLayout.LayoutParams(dp(330), ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(dp(20), dp(22), dp(20), dp(18))
+            layoutParams = LinearLayout.LayoutParams(dp(320), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         outer.addView(card)
 
         fun label(text: String): TextView = TextView(this).apply {
             this.text = text
-            textSize = 12f
+            textSize = 11f
             setTextColor(COL_DIM)
             letterSpacing = 0.12f
         }
@@ -306,7 +306,7 @@ class MainActivity : Activity() {
                 setTextColor(COL_TEXT)
                 setHintTextColor(COL_HINT)
                 setBackgroundResource(R.drawable.bg_input)
-                setPadding(dp(16), dp(13), dp(16), dp(13))
+                setPadding(dp(14), dp(11), dp(14), dp(11))
                 setSingleLine(true)
                 if (pwd) transformationMethod = android.text.method.PasswordTransformationMethod.getInstance()
                 if (prefill.isNotEmpty()) setText(prefill)
@@ -334,23 +334,23 @@ class MainActivity : Activity() {
         // Logo + 标题
         card.addView(ImageView(this).apply {
             setImageResource(R.drawable.ic_launcher_foreground)
-            layoutParams = LinearLayout.LayoutParams(dp(52), dp(52)).apply { gravity = Gravity.CENTER_HORIZONTAL }
+            layoutParams = LinearLayout.LayoutParams(dp(38), dp(38)).apply { gravity = Gravity.CENTER_HORIZONTAL }
         })
         card.addView(TextView(this).apply {
             text = "DSH Mobile"
-            textSize = 26f
+            textSize = 21f
             typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
             setTextColor(COL_TITLE)
             gravity = Gravity.CENTER
-        }, rowParams(top = dp(10)))
+        }, rowParams(top = dp(6)))
         card.addView(TextView(this).apply {
             text = "DeepSeek Harness · 手机端"
-            textSize = 13f
+            textSize = 11f
             setTextColor(COL_MUTED)
             gravity = Gravity.CENTER
         }, rowParams(top = dp(4)))
 
-        card.addView(label("服务器地址"), rowParams(top = dp(24)))
+        card.addView(label("服务器地址"), rowParams(top = dp(16)))
 
         // 协议分段：优先使用独立保存的服务器信息，避免被 SSH 随机本地端口覆盖
         val savedUrl = prefs.getString("url", null)
@@ -378,8 +378,8 @@ class MainActivity : Activity() {
         val httpsBtn = segment("https", prefillProto == "https")
         val protocolGroup = RadioGroup(this).apply {
             orientation = RadioGroup.HORIZONTAL
-            addView(httpBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
-            addView(httpsBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(6) })
+            addView(httpBtn, LinearLayout.LayoutParams(0, dp(38), 1f).apply { marginEnd = dp(6) })
+            addView(httpsBtn, LinearLayout.LayoutParams(0, dp(38), 1f).apply { marginStart = dp(6) })
         }
         card.addView(protocolGroup, rowParams(top = dp(8)))
 
@@ -390,23 +390,26 @@ class MainActivity : Activity() {
             setBackgroundResource(R.drawable.bg_input)
             setPadding(dp(16), dp(13), dp(16), dp(13)); setSingleLine(true)
         }
-        card.addView(hostInput, rowParams(top = dp(10), height = dp(46)))
-
         val portInput = EditText(this).apply {
             hint = "端口"; setText(prefillPort)
             setTextColor(COL_TEXT); setHintTextColor(COL_HINT)
             setBackgroundResource(R.drawable.bg_input)
-            setPadding(dp(16), dp(13), dp(16), dp(13)); setSingleLine(true)
+            setPadding(dp(16), dp(12), dp(16), dp(12)); setSingleLine(true)
         }
-        card.addView(portInput, rowParams(top = dp(10), height = dp(46)))
+        val serverRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(hostInput, LinearLayout.LayoutParams(0, dp(42), 2f).apply { marginEnd = dp(8) })
+            addView(portInput, LinearLayout.LayoutParams(0, dp(42), 1f))
+        }
+        card.addView(serverRow, rowParams(top = dp(8)))
 
         // SSH 隧道
         val savedSsh = prefs.getString("ssh_json", null)?.let {
             try { JSONObject(it) } catch (_: Exception) { null }
         }
-        card.addView(label("SSH 隧道"), rowParams(top = dp(24)))
+        card.addView(label("SSH 隧道"), rowParams(top = dp(14)))
         val sshToggle = CheckBox(this).apply {
-            text = "通过 SSH 本地转发连接（解锁设置/凭据等接口）"
+            text = "SSH 隧道（解锁本机配置）"
             setTextColor(COL_TEXT)
             buttonTintList = ColorStateList.valueOf(COL_ACCENT)
             isChecked = prefs.getBoolean(PREF_SSH_ENABLED, false)
@@ -423,8 +426,8 @@ class MainActivity : Activity() {
         val authKeyBtn = segment("私钥", false)
         val authGroup = RadioGroup(this).apply {
             orientation = RadioGroup.HORIZONTAL
-            addView(authPassBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(6) })
-            addView(authKeyBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(6) })
+            addView(authPassBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(6) })
+            addView(authKeyBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginStart = dp(6) })
         }
         val keyPathInput = input("私钥文件路径（可点浏览导入）", savedSsh?.optString("keyPath") ?: "")
         keyPathInput.isFocusable = true
@@ -442,7 +445,7 @@ class MainActivity : Activity() {
             authGroup, keyPathInput, keyPassInput, browseKeyBtn)
         sshFields.forEach {
             it.visibility = View.GONE
-            card.addView(it, rowParams(top = dp(8), height = dp(44)))
+            card.addView(it, rowParams(top = dp(6), height = dp(40)))
         }
 
         // 关键：认证方式控制密码/私钥字段显隐
@@ -470,13 +473,13 @@ class MainActivity : Activity() {
         syncAuthFields()
         syncSshVisibility()
 
-        card.addView(spacer(dp(18)))
+        card.addView(spacer(dp(10)))
 
         statusView = TextView(this).apply {
             textSize = 13f
             setTextColor(COL_MUTED)
             gravity = Gravity.CENTER
-            minHeight = dp(20)
+            minHeight = dp(14)
         }
         card.addView(statusView)
 
@@ -516,14 +519,14 @@ class MainActivity : Activity() {
                     connectWeb(url)
                 }
             }
-        }, rowParams(top = dp(8), height = dp(50)))
+        }, rowParams(top = dp(6), height = dp(44)))
 
         card.addView(TextView(this).apply {
-            text = "完整网页=桌面级功能 · SSH=解锁设置/凭据等本机接口"
-            textSize = 11f
+            text = "完整网页=桌面级 · SSH=解锁本机配置"
+            textSize = 10f
             setTextColor(COL_DIM)
             gravity = Gravity.CENTER
-        }, rowParams(top = dp(14)))
+        }, rowParams(top = dp(8)))
 
         return scroll
     }
