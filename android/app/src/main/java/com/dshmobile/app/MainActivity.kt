@@ -278,11 +278,11 @@ class MainActivity : Activity() {
         }
         val outer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
+            gravity = Gravity.CENTER
             setPadding(dp(16), dp(14), dp(16), dp(14))
         }
         scroll.addView(outer, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ))
 
         val card = LinearLayout(this).apply {
@@ -409,7 +409,7 @@ class MainActivity : Activity() {
         }
         card.addView(label("SSH 隧道"), rowParams(top = dp(14)))
         val sshToggle = CheckBox(this).apply {
-            text = "SSH 隧道（解锁本机配置）"
+            text = "启用（解锁本机配置）"
             setTextColor(COL_TEXT)
             buttonTintList = ColorStateList.valueOf(COL_ACCENT)
             isChecked = prefs.getBoolean(PREF_SSH_ENABLED, false)
@@ -445,7 +445,9 @@ class MainActivity : Activity() {
             authGroup, keyPathInput, keyPassInput, browseKeyBtn)
         sshFields.forEach {
             it.visibility = View.GONE
-            card.addView(it, rowParams(top = dp(6), height = dp(40)))
+            card.addView(it, rowParams(
+                top = dp(6), height = dp(40), width = ViewGroup.LayoutParams.MATCH_PARENT
+            ))
         }
 
         // 关键：认证方式控制密码/私钥字段显隐
@@ -519,7 +521,7 @@ class MainActivity : Activity() {
                     connectWeb(url)
                 }
             }
-        }, rowParams(top = dp(6), height = dp(44)))
+        }, rowParams(top = dp(6), height = dp(44), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         card.addView(TextView(this).apply {
             text = "完整网页=桌面级 · SSH=解锁本机配置"
