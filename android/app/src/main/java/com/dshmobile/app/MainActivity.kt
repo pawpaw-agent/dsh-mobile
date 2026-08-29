@@ -384,7 +384,7 @@ class MainActivity : Activity() {
         card.addView(protocolGroup, rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         val hostInput = EditText(this).apply {
-            hint = "192.168.1.100 / 100.x.x.x / 隧道域名"
+            hint = "服务器 IP / 域名"
             setText(prefillHost)
             setTextColor(COL_TEXT); setHintTextColor(COL_HINT)
             setBackgroundResource(R.drawable.bg_input)
@@ -409,16 +409,16 @@ class MainActivity : Activity() {
         }
         card.addView(label("SSH 隧道"), rowParams(top = dp(14)))
         val sshToggle = CheckBox(this).apply {
-            text = "启用（解锁本机配置）"
+            text = "启用 SSH"
             setTextColor(COL_TEXT)
             buttonTintList = ColorStateList.valueOf(COL_ACCENT)
             isChecked = prefs.getBoolean(PREF_SSH_ENABLED, false)
         }
         card.addView(sshToggle, rowParams(top = dp(4)))
 
-        val sshHostInput = input("SSH 主机（电脑 IP / 域名）", savedSsh?.optString("sshHost") ?: "")
+        val sshHostInput = input("SSH 主机", savedSsh?.optString("sshHost") ?: "")
         val sshPortInput = input("SSH 端口", savedSsh?.optString("sshPort") ?: "22")
-        val sshUserInput = input("SSH 用户名", savedSsh?.optString("sshUser") ?: "")
+        val sshUserInput = input("用户名", savedSsh?.optString("sshUser") ?: "")
         val sshPassInput = input("SSH 密码", savedSsh?.optString("password") ?: "", pwd = true)
 
         // 认证方式：密码 / 私钥
@@ -429,7 +429,7 @@ class MainActivity : Activity() {
             addView(authPassBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(6) })
             addView(authKeyBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginStart = dp(6) })
         }
-        val keyPathInput = input("私钥文件路径（可点浏览导入）", savedSsh?.optString("keyPath") ?: "")
+        val keyPathInput = input("私钥路径（可导入）", savedSsh?.optString("keyPath") ?: "")
         keyPathInput.isFocusable = true
         sshKeyPathInput = keyPathInput
         val keyPassInput = input("私钥口令（可选）", savedSsh?.optString("keyPass") ?: "", pwd = true)
@@ -524,7 +524,7 @@ class MainActivity : Activity() {
         }, rowParams(top = dp(6), height = dp(44), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         card.addView(TextView(this).apply {
-            text = "完整网页=桌面级 · SSH=解锁本机配置"
+            text = "网页=桌面级 · SSH=解锁本机配置"
             textSize = 10f
             setTextColor(COL_DIM)
             gravity = Gravity.CENTER
