@@ -2,14 +2,15 @@
 <!--
   原生客户端：不依赖 Material Components / AppCompat 库，直接用平台内置主题。
   - Theme.Material（API 21+，minSdk 26 满足）深色基底，避免冷启动白闪。
-  - colorPrimary 等 Material 属性未在代码中使用（原生 Activity + 平台 Button/EditText），移除。
-  - 仅保留状态栏/导航栏颜色与窗口背景。
+  - 全 App 黑白色调与启动图标一致；状态栏/导航栏区域由 Activity 设为透明并沉浸隐藏。
 -->
 <resources>
     <style name="Theme.DshMobile" parent="@android:style/Theme.Material.NoActionBar">
-        <item name="android:statusBarColor">#0a2647</item>
-        <item name="android:navigationBarColor">#0a2647</item>
-        <item name="android:windowBackground">#1A1A2E</item>
+        <item name="android:statusBarColor">#0A0A0E</item>
+        <item name="android:navigationBarColor">#0A0A0E</item>
+        <item name="android:windowBackground">#0A0A0E</item>
         <item name="android:windowFullscreen">true</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>

@@ -1,5 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="launcher_background">#111111</color>
-    <color name="launcher_accent">#E94560</color>
+    <color name="launcher_accent">#F5F5F7</color>
+    <color name="ui_bg">#0A0A0E</color>
+    <color name="ui_surface">#101015</color>
+    <color name="ui_surface_border">#1FFFFFFF</color>
+    <color name="ui_text">#F5F5F7</color>
+    <color name="ui_muted">#99FFFFFF</color>
+    <color name="ui_dim">#55FFFFFF</color>
+    <color name="ui_accent">#F5F5F7</color>
+    <color name="ui_accent_text">#0A0A0E</color>
+    <color name="ui_input_bg">#14FFFFFF</color>
+    <color name="ui_input_border">#2EFFFFFF</color>
+    <color name="ui_error">#FF6B6B</color>
 </resources>

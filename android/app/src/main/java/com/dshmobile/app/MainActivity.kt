@@ -3,6 +3,10 @@ package com.dshmobile.app
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
+import android.content.Intent
+import android.content.res.ColorStateList
+import android.graphics.Typeface
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
@@ -12,21 +16,28 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.RadioButton
 import android.widget.RadioGroup
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.dshmobile.protocol.SshTunnel
 import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
 
 /**
  * dsh-mobile 连接屏 —— 纯 WebView 版：
@@ -40,27 +51,36 @@ import org.json.JSONObject
  *  SSH 隧道可选：经 sshd 本地端口转发访问，服务端视角为回环，
  *  配置平面（settings/credentials/…）全解锁 —— 官方文档认可的合规远程路径。
  *  SSH 配置持久化，App 重启自动恢复；断线重连后 WebView 自动跟随新端口。
+ *
+ *  视觉：全 App 黑白色调 —— 与启动图标一致。
  */
 class MainActivity : Activity() {
     private var webView: WebView? = null
     private var connectView: View? = null
     private var errorView: View? = null
+    private var progressBar: ProgressBar? = null
     private var lastUrl: String? = null
     private var pendingAuth: HttpAuthHandler? = null
     private var statusView: TextView? = null
+    private var sshKeyPathInput: EditText? = null
     private lateinit var prefs: android.content.SharedPreferences
 
     private companion object {
-        const val COL_BG = 0xFF1A1A2E.toInt()
-        const val COL_ACCENT = 0xFFE94560.toInt()
-        const val COL_TITLE = 0xFF0F3460.toInt()
-        const val COL_TEXT = 0xFFFFFFFF.toInt()
-        const val COL_HINT = 0x80FFFFFF.toInt()
-        const val COL_INPUT_BG = 0x33FFFFFF.toInt()
-        const val COL_MUTED = 0xB3FFFFFF.toInt()
-        const val COL_DIM = 0x80FFFFFF.toInt()
+        // 黑白色调
+        const val COL_BG = 0xFF0A0A0E.toInt()
+        const val COL_SURFACE = 0xFF101015.toInt()
+        const val COL_TEXT = 0xFFF5F5F7.toInt()
+        const val COL_TITLE = 0xFFF5F5F7.toInt()
+        const val COL_MUTED = 0x99FFFFFF.toInt()
+        const val COL_DIM = 0x55FFFFFF.toInt()
+        const val COL_HINT = 0x66FFFFFF.toInt()
+        const val COL_INPUT_BG = 0x14FFFFFF.toInt()
+        const val COL_ACCENT = 0xFFF5F5F7.toInt()
+        const val COL_ACCENT_TEXT = 0xFF0A0A0E.toInt()
+        const val COL_ERROR = 0xFFFF6B6B.toInt()
         const val UA_MARKER = "DshMobile/1.0"
         const val DEFAULT_PORT = "3080"
+        const val REQ_PICK_KEY = 2001
 
         const val PREF_SSH_ENABLED = "ssh_enabled" // 上次是否通过 SSH 隧道连接
 
@@ -128,8 +148,30 @@ class MainActivity : Activity() {
                     showAuthDialog(handler, host)
                 }
             }
+            webChromeClient = object : WebChromeClient() {
+                override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                    if (newProgress >= 100) {
+                        progressBar?.visibility = View.GONE
+                    } else {
+                        progressBar?.visibility = View.VISIBLE
+                        progressBar?.progress = newProgress
+                    }
+                }
+            }
         }
         root.addView(webView)
+
+        // 细进度条（WebView 加载时顶部一条白线，保持沉浸、不遮挡内容）
+        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progressTintList = ColorStateList.valueOf(COL_ACCENT)
+            progressBackgroundTintList = ColorStateList.valueOf(0x22FFFFFF.toInt())
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(3)
+            ).apply { gravity = Gravity.TOP }
+            visibility = View.GONE
+        }
+        root.addView(progressBar)
 
         // ── 连接屏 ───────────────────────────────────────────────
         connectView = createConnectView()
@@ -227,57 +269,87 @@ class MainActivity : Activity() {
 
     // ── 连接屏 UI ─────────────────────────────────────────────
     private fun createConnectView(): View {
-        val column = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        val scroll = ScrollView(this).apply {
             setBackgroundColor(COL_BG)
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { gravity = Gravity.CENTER }
+            isFillViewport = true
         }
-        val wrapper = FrameLayout(this).apply { setBackgroundColor(COL_BG); addView(column) }
-
-        column.addView(TextView(this).apply {
-            text = "DSH Mobile"; textSize = 28f; setTextColor(COL_TITLE)
-        })
-        column.addView(TextView(this).apply {
-            text = "Connect to DeepSeek Harness on your computer"; textSize = 14f; setTextColor(COL_MUTED)
-        }, rowParams(top = dp(8)))
-
-        // SSH 隧道开关
-        val sshToggle = android.widget.CheckBox(this).apply {
-            text = "SSH 隧道（解锁设置/凭据等本机限制接口）"; setTextColor(COL_MUTED)
+        val outer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(20), dp(36), dp(20), dp(36))
         }
-        column.addView(sshToggle, rowParams(top = dp(8), width = dp(300)))
+        scroll.addView(outer, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
 
-        val savedSsh = prefs.getString("ssh_json", null)?.let {
-            try { JSONObject(it) } catch (_: Exception) { null }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_card)
+            setPadding(dp(26), dp(30), dp(26), dp(26))
+            layoutParams = LinearLayout.LayoutParams(dp(330), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
-        fun sshField(hint: String, key: String, prefill: String? = null, pwd: Boolean = false): EditText =
+        outer.addView(card)
+
+        fun label(text: String): TextView = TextView(this).apply {
+            this.text = text
+            textSize = 12f
+            setTextColor(COL_DIM)
+            letterSpacing = 0.12f
+        }
+
+        fun input(hint: String, prefill: String = "", pwd: Boolean = false): EditText =
             EditText(this).apply {
                 this.hint = hint
-                setTextColor(COL_TEXT); setHintTextColor(COL_DIM); setBackgroundColor(COL_INPUT_BG)
+                setTextColor(COL_TEXT)
+                setHintTextColor(COL_HINT)
+                setBackgroundResource(R.drawable.bg_input)
+                setPadding(dp(16), dp(13), dp(16), dp(13))
+                setSingleLine(true)
                 if (pwd) transformationMethod = android.text.method.PasswordTransformationMethod.getInstance()
-                (prefill ?: savedSsh?.optString(key) ?: "").let { if (it.isNotEmpty()) setText(it) }
+                if (prefill.isNotEmpty()) setText(prefill)
             }
-        val sshHostInput = sshField("SSH 主机（电脑 IP / 域名）", "sshHost")
-        val sshPortInput = sshField("SSH 端口", "sshPort", prefill = savedSsh?.optString("sshPort") ?: "22")
-        val sshUserInput = sshField("SSH 用户名", "sshUser")
-        val sshPassInput = sshField("SSH 密码", "password", pwd = true)
-        val sshFields = listOf(sshHostInput, sshPortInput, sshUserInput, sshPassInput)
-        sshFields.forEach {
-            it.visibility = View.GONE
-            column.addView(it, rowParams(top = dp(8), width = dp(300), height = dp(44)))
-        }
-        // 恢复上次 SSH 开关状态；勾选时立即显示字段
-        sshToggle.isChecked = prefs.getBoolean(PREF_SSH_ENABLED, false)
-        sshFields.forEach { it.visibility = if (sshToggle.isChecked) View.VISIBLE else View.GONE }
-        sshToggle.setOnCheckedChangeListener { _, checked ->
-            sshFields.forEach { it.visibility = if (checked) View.VISIBLE else View.GONE }
-        }
 
-        column.addView(spacer(dp(16)))
+        fun segment(text: String, initial: Boolean = false): RadioButton =
+            RadioButton(this).apply {
+                id = View.generateViewId()
+                this.text = text
+                isChecked = initial
+                buttonDrawable = null
+                gravity = Gravity.CENTER
+                setPadding(dp(16), dp(11), dp(16), dp(11))
+                setBackgroundResource(R.drawable.bg_segment)
+                setTextColor(if (initial) COL_ACCENT_TEXT else COL_TEXT)
+                setOnCheckedChangeListener { _, checked ->
+                    setTextColor(if (checked) COL_ACCENT_TEXT else COL_TEXT)
+                }
+            }
 
-        // dsh web 地址
+        fun rowParams(top: Int = 0, width: Int = ViewGroup.LayoutParams.WRAP_CONTENT,
+                      height: Int = ViewGroup.LayoutParams.WRAP_CONTENT) =
+            LinearLayout.LayoutParams(width, height).apply { topMargin = top }
+
+        // Logo + 标题
+        card.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_launcher_foreground)
+            layoutParams = LinearLayout.LayoutParams(dp(52), dp(52)).apply { gravity = Gravity.CENTER_HORIZONTAL }
+        })
+        card.addView(TextView(this).apply {
+            text = "DSH Mobile"
+            textSize = 26f
+            typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+            setTextColor(COL_TITLE)
+            gravity = Gravity.CENTER
+        }, rowParams(top = dp(10)))
+        card.addView(TextView(this).apply {
+            text = "DeepSeek Harness · 手机端"
+            textSize = 13f
+            setTextColor(COL_MUTED)
+            gravity = Gravity.CENTER
+        }, rowParams(top = dp(4)))
+
+        card.addView(label("服务器地址"), rowParams(top = dp(24)))
+
+        // 协议分段
         val savedUrl = prefs.getString("url", null)
         var prefillProto = "http"; var prefillHost = ""; var prefillPort = DEFAULT_PORT
         savedUrl?.let {
@@ -286,32 +358,117 @@ class MainActivity : Activity() {
                 if (m.groupValues[3].isNotEmpty()) prefillPort = m.groupValues[3]
             }
         }
-        val httpBtn = RadioButton(this).apply { id = View.generateViewId(); text = "http"; setTextColor(COL_TEXT) }
-        val httpsBtn = RadioButton(this).apply { id = View.generateViewId(); text = "https"; setTextColor(COL_TEXT) }
+        val httpBtn = segment("HTTP", prefillProto != "https")
+        val httpsBtn = segment("HTTPS", prefillProto == "https")
         val protocolGroup = RadioGroup(this).apply {
-            orientation = RadioGroup.HORIZONTAL; addView(httpBtn); addView(httpsBtn)
-            check(if (prefillProto == "https") httpsBtn.id else httpBtn.id)
+            orientation = RadioGroup.HORIZONTAL
+            addView(httpBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
+            addView(httpsBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(6) })
         }
-        column.addView(protocolGroup, rowParams(top = dp(8), width = dp(300)))
+        card.addView(protocolGroup, rowParams(top = dp(8)))
 
         val hostInput = EditText(this).apply {
-            hint = "192.168.1.100 / 100.x.x.x / 隧道域名"; setText(prefillHost)
-            setTextColor(COL_TEXT); setHintTextColor(COL_DIM); setBackgroundColor(COL_INPUT_BG)
+            hint = "192.168.1.100 / 100.x.x.x / 隧道域名"
+            setText(prefillHost)
+            setTextColor(COL_TEXT); setHintTextColor(COL_HINT)
+            setBackgroundResource(R.drawable.bg_input)
+            setPadding(dp(16), dp(13), dp(16), dp(13)); setSingleLine(true)
         }
-        column.addView(hostInput, rowParams(top = dp(12), width = dp(300), height = dp(46)))
+        card.addView(hostInput, rowParams(top = dp(10), height = dp(46)))
 
         val portInput = EditText(this).apply {
-            hint = "port"; setText(prefillPort)
-            setTextColor(COL_TEXT); setHintTextColor(COL_DIM); setBackgroundColor(COL_INPUT_BG)
+            hint = "端口"; setText(prefillPort)
+            setTextColor(COL_TEXT); setHintTextColor(COL_HINT)
+            setBackgroundResource(R.drawable.bg_input)
+            setPadding(dp(16), dp(13), dp(16), dp(13)); setSingleLine(true)
         }
-        column.addView(portInput, rowParams(top = dp(12), width = dp(300), height = dp(46)))
+        card.addView(portInput, rowParams(top = dp(10), height = dp(46)))
 
-        column.addView(spacer(dp(20)))
+        // SSH 隧道
+        val savedSsh = prefs.getString("ssh_json", null)?.let {
+            try { JSONObject(it) } catch (_: Exception) { null }
+        }
+        card.addView(label("SSH 隧道"), rowParams(top = dp(24)))
+        val sshToggle = CheckBox(this).apply {
+            text = "通过 SSH 本地转发连接（解锁设置/凭据等接口）"
+            setTextColor(COL_TEXT)
+            buttonTintList = ColorStateList.valueOf(COL_ACCENT)
+            isChecked = prefs.getBoolean(PREF_SSH_ENABLED, false)
+        }
+        card.addView(sshToggle, rowParams(top = dp(4)))
 
-        statusView = TextView(this).apply { textSize = 13f; setTextColor(COL_MUTED); gravity = Gravity.CENTER }
+        val sshHostInput = input("SSH 主机（电脑 IP / 域名）", savedSsh?.optString("sshHost") ?: "")
+        val sshPortInput = input("SSH 端口", savedSsh?.optString("sshPort") ?: "22")
+        val sshUserInput = input("SSH 用户名", savedSsh?.optString("sshUser") ?: "")
+        val sshPassInput = input("SSH 密码", savedSsh?.optString("password") ?: "", pwd = true)
 
-        column.addView(Button(this).apply {
-            text = "Connect"; setTextColor(COL_TEXT); setBackgroundColor(COL_ACCENT)
+        // 认证方式：密码 / 私钥
+        val authPassBtn = segment("密码", true)
+        val authKeyBtn = segment("私钥", false)
+        val authGroup = RadioGroup(this).apply {
+            orientation = RadioGroup.HORIZONTAL
+            addView(authPassBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(6) })
+            addView(authKeyBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(6) })
+        }
+        val keyPathInput = input("私钥文件路径（可点浏览导入）", savedSsh?.optString("keyPath") ?: "")
+        keyPathInput.isFocusable = true
+        sshKeyPathInput = keyPathInput
+        val keyPassInput = input("私钥口令（可选）", savedSsh?.optString("keyPass") ?: "", pwd = true)
+        val browseKeyBtn = Button(this).apply {
+            text = "浏览导入私钥…"
+            isAllCaps = false
+            setTextColor(COL_TEXT)
+            setBackgroundResource(R.drawable.bg_button_secondary)
+            setOnClickListener { pickSshKey() }
+        }
+
+        val sshFields = listOf(sshHostInput, sshPortInput, sshUserInput, sshPassInput,
+            authGroup, keyPathInput, keyPassInput, browseKeyBtn)
+        sshFields.forEach {
+            it.visibility = View.GONE
+            card.addView(it, rowParams(top = dp(8), height = dp(44)))
+        }
+
+        // 关键：认证方式控制密码/私钥字段显隐
+        val savedAuthType = savedSsh?.optString("authType", "password") ?: "password"
+        if (savedAuthType == "key") authKeyBtn.isChecked = true else authPassBtn.isChecked = true
+        fun syncAuthFields() {
+            val key = authKeyBtn.isChecked
+            keyPathInput.visibility = if (key) View.VISIBLE else View.GONE
+            keyPassInput.visibility = if (key) View.VISIBLE else View.GONE
+            browseKeyBtn.visibility = if (key) View.VISIBLE else View.GONE
+            sshPassInput.visibility = if (key) View.GONE else if (sshToggle.isChecked) View.VISIBLE else View.GONE
+        }
+        authGroup.setOnCheckedChangeListener { _, _ -> syncAuthFields() }
+
+        fun syncSshVisibility() {
+            val on = sshToggle.isChecked
+            listOf(sshHostInput, sshPortInput, sshUserInput, authGroup).forEach { it.visibility = if (on) View.VISIBLE else View.GONE }
+            if (on) {
+                syncAuthFields()
+            } else {
+                listOf(keyPathInput, keyPassInput, browseKeyBtn).forEach { it.visibility = View.GONE }
+            }
+        }
+        sshToggle.setOnCheckedChangeListener { _, _ -> syncSshVisibility() }
+        syncAuthFields()
+        syncSshVisibility()
+
+        card.addView(spacer(dp(18)))
+
+        statusView = TextView(this).apply {
+            textSize = 13f
+            setTextColor(COL_MUTED)
+            gravity = Gravity.CENTER
+            minHeight = dp(20)
+        }
+        card.addView(statusView)
+
+        card.addView(Button(this).apply {
+            text = "连接"
+            isAllCaps = false
+            setTextColor(COL_ACCENT_TEXT)
+            setBackgroundResource(R.drawable.bg_button_primary)
             setOnClickListener {
                 val useSsh = sshToggle.isChecked
                 prefs.edit().putBoolean(PREF_SSH_ENABLED, useSsh).apply()
@@ -320,10 +477,16 @@ class MainActivity : Activity() {
                 if (useSsh) {
                     val sh = sshHostInput.text.toString().trim()
                     val su = sshUserInput.text.toString().trim()
-                    val sp = sshPassInput.text.toString()
                     val sport = sshPortInput.text.toString().trim().toIntOrNull() ?: 22
                     if (sh.isBlank() || su.isBlank()) { status("SSH 主机/用户名不能为空"); return@setOnClickListener }
-                    connectViaSsh(sh, sport, su, remotePort, sp)
+                    val auth = if (authKeyBtn.isChecked) {
+                        val path = keyPathInput.text.toString().trim()
+                        if (path.isBlank()) { status("请选择 SSH 私钥"); return@setOnClickListener }
+                        SshTunnel.Auth.KeyPair(File(path), keyPassInput.text.toString().ifEmpty { null })
+                    } else {
+                        SshTunnel.Auth.Password(sshPassInput.text.toString())
+                    }
+                    connectViaSsh(sh, sport, su, remotePort, auth)
                 } else {
                     val host = hostInput.text.toString().trim()
                     if (host.isBlank()) { status("host 不能为空"); return@setOnClickListener }
@@ -332,14 +495,44 @@ class MainActivity : Activity() {
                     connectWeb(url)
                 }
             }
-        }, rowParams(top = dp(8), height = dp(48), width = dp(300)))
+        }, rowParams(top = dp(8), height = dp(50)))
 
-        column.addView(statusView, rowParams(top = dp(12)))
-        column.addView(TextView(this).apply {
+        card.addView(TextView(this).apply {
             text = "完整网页=桌面级功能 · SSH=解锁设置/凭据等本机接口"
-            textSize = 11f; setTextColor(COL_DIM); gravity = Gravity.CENTER
-        }, rowParams(top = dp(20)))
-        return wrapper
+            textSize = 11f
+            setTextColor(COL_DIM)
+            gravity = Gravity.CENTER
+        }, rowParams(top = dp(14)))
+
+        return scroll
+    }
+
+    private fun pickSshKey() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        try {
+            startActivityForResult(intent, REQ_PICK_KEY)
+        } catch (_: Exception) {
+            status("无法打开文件选择器")
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_PICK_KEY || resultCode != RESULT_OK) return
+        val uri: Uri = data?.data ?: return
+        try {
+            val dest = File(filesDir, "ssh_private_key")
+            contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(dest).use { output -> input.copyTo(output) }
+            } ?: run { status("读取私钥失败"); return }
+            sshKeyPathInput?.setText(dest.absolutePath)
+            status("私钥已导入到应用私有目录")
+        } catch (e: Exception) {
+            status("导入私钥失败：${e.message ?: "未知错误"}")
+        }
     }
 
     private fun status(msg: String) { statusView?.text = msg }
@@ -354,14 +547,14 @@ class MainActivity : Activity() {
     }
 
     // ── SSH 隧道（纯 WebView 用）─────────────────────────────
-    private fun connectViaSsh(sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, password: String) {
+    private fun connectViaSsh(sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, auth: SshTunnel.Auth) {
         status("SSH 隧道建立中… $sshUser@$sshHost")
         val app = application as DshApp
         Thread {
             val tunnel = SshTunnel(
                 sshHost = sshHost, sshPort = sshPort, sshUser = sshUser,
                 remoteHost = "127.0.0.1", remotePort = remotePort,
-                auth = SshTunnel.Auth.Password(password)
+                auth = auth
             )
             tunnel.onStateChange = { s -> runOnUiThread { status("隧道: $s") } }
             tunnel.onLocalBaseChanged = { newBase ->
@@ -370,20 +563,33 @@ class MainActivity : Activity() {
             tunnel.start()
             val base = tunnel.localBaseUrl
             runOnUiThread {
-                if (base == null) { tunnel.close(); status("隧道建立失败（检查 SSH 主机/端口/用户/密码）"); return@runOnUiThread }
-                persistSshConfig(sshHost, sshPort, sshUser, remotePort, password)
+                if (base == null) { tunnel.close(); status("隧道建立失败（检查 SSH 主机/端口/用户/认证）"); return@runOnUiThread }
+                persistSshConfig(sshHost, sshPort, sshUser, remotePort, auth)
                 app.sshTunnel = tunnel
                 connectWeb(base)
             }
         }.start()
     }
 
-    private fun persistSshConfig(sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, password: String) {
+    private fun persistSshConfig(
+        sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, auth: SshTunnel.Auth
+    ) {
         try {
-            prefs.edit().putString("ssh_json", JSONObject()
-                .put("sshHost", sshHost).put("sshPort", sshPort).put("sshUser", sshUser)
-                .put("remoteHost", "127.0.0.1").put("remotePort", remotePort)
-                .put("authType", "password").put("password", password).toString()).apply()
+            val json = JSONObject()
+                .put("sshHost", sshHost)
+                .put("sshPort", sshPort)
+                .put("sshUser", sshUser)
+                .put("remoteHost", "127.0.0.1")
+                .put("remotePort", remotePort)
+            when (auth) {
+                is SshTunnel.Auth.Password ->
+                    json.put("authType", "password").put("password", auth.password)
+                is SshTunnel.Auth.KeyPair ->
+                    json.put("authType", "key")
+                        .put("keyPath", auth.privateKeyFile.absolutePath)
+                        .put("keyPass", auth.passphrase ?: "")
+            }
+            prefs.edit().putString("ssh_json", json.toString()).apply()
         } catch (_: Exception) {}
     }
 
@@ -392,11 +598,17 @@ class MainActivity : Activity() {
         if (pendingAuth != null) { handler.cancel(); return }
         pendingAuth = handler
         val usernameInput = EditText(this).apply {
-            hint = "username"; setTextColor(COL_TEXT); setHintTextColor(COL_HINT); setBackgroundColor(COL_INPUT_BG)
+            hint = "username"
+            setTextColor(COL_TEXT); setHintTextColor(COL_HINT)
+            setBackgroundResource(R.drawable.bg_input)
+            setPadding(dp(16), dp(13), dp(16), dp(13))
         }
         val passwordInput = EditText(this).apply {
-            hint = "password"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setTextColor(COL_TEXT); setHintTextColor(COL_HINT); setBackgroundColor(COL_INPUT_BG)
+            hint = "password"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setTextColor(COL_TEXT); setHintTextColor(COL_HINT)
+            setBackgroundResource(R.drawable.bg_input)
+            setPadding(dp(16), dp(13), dp(16), dp(13))
         }
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -422,24 +634,37 @@ class MainActivity : Activity() {
         if (errorView == null) {
             errorView = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setBackgroundColor(COL_BG); gravity = Gravity.CENTER
+                setBackgroundColor(COL_BG)
+                gravity = Gravity.CENTER
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
                 )
                 addView(TextView(this@MainActivity).apply {
-                    text = "连接失败"; textSize = 20f; setTextColor(COL_TEXT); gravity = Gravity.CENTER
+                    text = "连接失败"
+                    textSize = 22f
+                    setTextColor(COL_TEXT)
+                    gravity = Gravity.CENTER
                 })
                 addView(TextView(this@MainActivity).apply {
-                    text = "检查地址、端口和网络后重试"; textSize = 14f; setTextColor(COL_MUTED); gravity = Gravity.CENTER
+                    text = "检查地址、端口和网络后重试"
+                    textSize = 14f
+                    setTextColor(COL_MUTED)
+                    gravity = Gravity.CENTER
                 }, rowParams(top = dp(8)))
                 addView(Button(this@MainActivity).apply {
-                    text = "重试"; setTextColor(COL_TEXT); setBackgroundColor(COL_ACCENT)
+                    text = "重试"
+                    isAllCaps = false
+                    setTextColor(COL_ACCENT_TEXT)
+                    setBackgroundResource(R.drawable.bg_button_primary)
                     setOnClickListener { hideErrorPage(); lastUrl?.let { webView?.loadUrl(it) } }
-                }, rowParams(top = dp(24), height = dp(48), width = dp(160)))
+                }, rowParams(top = dp(24), height = dp(48), width = dp(200)))
                 addView(Button(this@MainActivity).apply {
-                    text = "换服务器"; setTextColor(COL_TEXT); setBackgroundColor(COL_INPUT_BG)
+                    text = "换服务器"
+                    isAllCaps = false
+                    setTextColor(COL_TEXT)
+                    setBackgroundResource(R.drawable.bg_button_secondary)
                     setOnClickListener { hideErrorPage(); connectView?.visibility = View.VISIBLE }
-                }, rowParams(top = dp(12), height = dp(48), width = dp(160)))
+                }, rowParams(top = dp(12), height = dp(48), width = dp(200)))
             }
             (webView?.parent as? ViewGroup)?.addView(errorView)
         }

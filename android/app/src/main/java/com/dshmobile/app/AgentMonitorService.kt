@@ -3,6 +3,7 @@ package com.dshmobile.app
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -53,6 +54,16 @@ class AgentMonitorService : Service() {
         connect()
     }
 
+    private fun openAppIntent(): PendingIntent {
+        val i = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+        return PendingIntent.getActivity(
+            this, 0, i,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
     private fun ensureNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -66,12 +77,10 @@ class AgentMonitorService : Service() {
         Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(if (done) "✅ Agent 任务完成" else "DSH Mobile")
             .setContentText(text)
-            .setSmallIcon(
-                if (done) android.R.drawable.stat_sys_download_done
-                else android.R.drawable.stat_notify_sync
-            )
+            .setSmallIcon(R.drawable.ic_notification)
             .setOngoing(!done)
             .setAutoCancel(done)
+            .setContentIntent(openAppIntent())
             .build()
 
     private fun connect() {
