@@ -132,7 +132,7 @@ class MainActivity : Activity() {
                 builtInZoomControls = true
                 displayZoomControls = false
                 setSupportZoom(true)
-                setInitialScale(75)
+                setInitialScale(85)
                 loadWithOverviewMode = true
                 useWideViewPort = true
             }
@@ -145,7 +145,7 @@ class MainActivity : Activity() {
                     // dsh 页面自带的 viewport initial-scale=1 会覆盖 setInitialScale，
                     // 这里在加载完成后直接设置 75% 显示缩放。
                     view?.evaluateJavascript(
-                        "document.documentElement.style.zoom='0.75';document.body.style.zoom='0.75';", null
+                        "document.documentElement.style.zoom='0.85';document.body.style.zoom='0.85';", null
                     )
                 }
                 override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
