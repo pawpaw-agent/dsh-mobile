@@ -90,6 +90,26 @@ class MainActivity : Activity() {
         // dsh 前端 RPC 依赖 crypto.randomUUID；WebView 在局域网明文 HTTP
         //（非安全上下文）下访问不到该 API，会导致全部 RPC 失败（白屏）。
         // 标准 UUID v4 polyfill（幂等）：与 dsh-lan-access 插件的兜底一致。
+
+        // 移动端视口修正：让页面根节点、会话/侧边栏和底部输入严格贴合屏幕。
+        // 只允许消息列表内部滚动，底部统计/输入栏始终可见。
+        val MOBILE_VIEWPORT_CSS = """
+            (function(){
+              try {
+                var style = document.createElement('style');
+                style.textContent = `
+                  html, body, #root { height: 100dvh !important; min-height: 100dvh !important; max-height: 100dvh !important; }
+                  html, body { margin: 0 !important; padding: 0 !important; overflow-x: hidden !important; }
+                  [data-slot="conversation"], [data-slot="sidebar"] { height: 100dvh !important; max-height: 100dvh !important; }
+                  [data-slot="conversation"] { overflow-y: auto !important; }
+                  [data-composer-card] { padding-bottom: max(8px, env(safe-area-inset-bottom)) !important; }
+                  [data-slot="conversation.input"] { padding-bottom: max(8px, env(safe-area-inset-bottom)) !important; }
+                `;
+                (document.head || document.documentElement).appendChild(style);
+              } catch(e) {}
+            })();
+        """.trimIndent()
+
         val CRYPTO_POLYFILL = """ // trimIndent 非编译期常量，故用 val
             (function(){
               try {
@@ -132,21 +152,16 @@ class MainActivity : Activity() {
                 builtInZoomControls = true
                 displayZoomControls = false
                 setSupportZoom(true)
-                setInitialScale(100)
                 loadWithOverviewMode = true
                 useWideViewPort = true
             }
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 WebViewCompat.addDocumentStartJavaScript(this, CRYPTO_POLYFILL, setOf("*"))
+                WebViewCompat.addDocumentStartJavaScript(this, MOBILE_VIEWPORT_CSS, setOf("*"))
             }
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     hideErrorPage()
-                    // dsh 页面自带的 viewport initial-scale=1 会覆盖 setInitialScale，
-                    // 这里在加载完成后直接设置 75% 显示缩放。
-                    view?.evaluateJavascript(
-                        "document.documentElement.style.zoom='1.0';document.body.style.zoom='1.0';", null
-                    )
                 }
                 override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                     if (request?.isForMainFrame == true) showErrorPage(error?.description?.toString() ?: "网络错误")
