@@ -104,11 +104,11 @@ class MainActivity : Activity() {
                   [data-slot="conversation"] { overflow-y: auto !important; }
                   [data-composer-card] { padding-bottom: max(8px, env(safe-area-inset-bottom)) !important; }
                   [data-slot="conversation.input"] { padding-bottom: max(8px, env(safe-area-inset-bottom)) !important; }
-                  [data-mobile-nav="stats"] {
+                  [data-mobile-nav="stats"][data-mobile-nav="stats"] {
                     flex-wrap: wrap !important;
                     height: auto !important;
-                    max-height: none !important;
                     min-height: 0 !important;
+                    max-height: none !important;
                     overflow: visible !important;
                     overflow-x: hidden !important;
                     overflow-y: visible !important;
@@ -117,13 +117,13 @@ class MainActivity : Activity() {
                     column-gap: 8px !important;
                     padding-bottom: 0 !important;
                   }
-                  [data-mobile-nav="stats"] > span {
+                  [data-mobile-nav="stats"][data-mobile-nav="stats"] > span {
                     font-size: 10px !important;
                     line-height: 15px !important;
                     margin: 0 6px 0 0 !important;
                     white-space: nowrap !important;
                   }
-                  [data-mobile-nav="stats"] .FJxK0a_sep {
+                  [data-mobile-nav="stats"][data-mobile-nav="stats"] .FJxK0a_sep {
                     margin: 0 4px !important;
                   }
                 `;
