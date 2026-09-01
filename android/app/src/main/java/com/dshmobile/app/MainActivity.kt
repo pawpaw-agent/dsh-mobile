@@ -104,6 +104,28 @@ class MainActivity : Activity() {
                   [data-slot="conversation"] { overflow-y: auto !important; }
                   [data-composer-card] { padding-bottom: max(8px, env(safe-area-inset-bottom)) !important; }
                   [data-slot="conversation.input"] { padding-bottom: max(8px, env(safe-area-inset-bottom)) !important; }
+                  [data-mobile-nav="stats"] {
+                    flex-wrap: wrap !important;
+                    height: auto !important;
+                    max-height: none !important;
+                    min-height: 0 !important;
+                    overflow: visible !important;
+                    overflow-x: hidden !important;
+                    overflow-y: visible !important;
+                    white-space: normal !important;
+                    row-gap: 2px !important;
+                    column-gap: 8px !important;
+                    padding-bottom: 0 !important;
+                  }
+                  [data-mobile-nav="stats"] > span {
+                    font-size: 10px !important;
+                    line-height: 15px !important;
+                    margin: 0 6px 0 0 !important;
+                    white-space: nowrap !important;
+                  }
+                  [data-mobile-nav="stats"] .FJxK0a_sep {
+                    margin: 0 4px !important;
+                  }
                 `;
                 (document.head || document.documentElement).appendChild(style);
               } catch(e) {}
@@ -133,6 +155,12 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("dsh-mobile", Context.MODE_PRIVATE)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT &&
+            (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            // 仅 debug 包开启 WebView 远程调试，方便真机调试；release 不暴露。
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
 
         val root = FrameLayout(this).apply { setBackgroundColor(COL_BG) }
 
