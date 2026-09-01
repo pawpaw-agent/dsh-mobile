@@ -99,7 +99,7 @@ class MainActivity : Activity() {
                 var style = document.createElement('style');
                 style.textContent = `
                   html, body, #root { height: 100vh !important; height: 100dvh !important; min-height: 100vh !important; min-height: 100dvh !important; max-height: 100vh !important; max-height: 100dvh !important; }
-                  html, body { margin: 0 !important; padding: 0 !important; overflow-x: hidden !important; }
+                  html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !important; overflow-x: hidden !important; overflow-y: hidden !important; }
                   [data-slot="conversation"], [data-slot="sidebar"] { height: 100vh !important; height: 100dvh !important; max-height: 100vh !important; max-height: 100dvh !important; }
                   [data-slot="conversation"] { overflow-y: auto !important; }
                   [data-composer-card] { padding-bottom: max(8px, env(safe-area-inset-bottom)) !important; }
