@@ -132,6 +132,73 @@ class MainActivity : Activity() {
             })();
         """.trimIndent()
 
+
+        // 会话状态恢复：dsh SPA 重新加载后会落在 hero/首页，不会自动打开上次的会话。
+        // 这里在页面加载后：
+        //   1. 如果当前是会话页，保存会话标题；
+        //   2. 如果当前是首页且本地有上次标题，自动打开侧边栏并点击对应会话行。
+        val RESTORE_SESSION_JS = """
+            (function(){
+              try {
+                var KEY = 'dsh.mobile.lastSessionTitle';
+                var FLAG = 'dsh.mobile.restoreAttempted';
+                function currentTitle(){
+                  return (document.title || '').replace(/\s*—\s*DeepSeek Harness\s*$/, '').trim();
+                }
+                function hasConversation(){
+                  return !!document.querySelector('[data-mobile-nav="stats"]');
+                }
+                function findRow(title){
+                  var nodes = Array.prototype.slice.call(document.querySelectorAll('*'));
+                  for (var i = 0; i < nodes.length; i++) {
+                    var e = nodes[i];
+                    if (e.children.length === 0 && e.textContent.trim() === title) {
+                      return e.closest('[class*="sessionRow"]') || e.parentElement || null;
+                    }
+                  }
+                  return null;
+                }
+                function restore(){
+                  var saved = localStorage.getItem(KEY);
+                  if (!saved || sessionStorage.getItem(FLAG)) return 'skip';
+                  sessionStorage.setItem(FLAG, '1');
+                  var tries = 0;
+                  var expanded = false;
+                  var timer = setInterval(function(){
+                    tries++;
+                    var row = findRow(saved);
+                    if (row) {
+                      row.click();
+                      clearInterval(timer);
+                      return;
+                    }
+                    if (!expanded) {
+                      expanded = true;
+                      Array.prototype.slice.call(document.querySelectorAll('[class*="YDXeBa_projectRow"]')).forEach(function(el){
+                        try { el.click(); } catch(e) {}
+                      });
+                    }
+                    if (tries > 25) clearInterval(timer);
+                  }, 300);
+                  return 'restoring';
+                }
+                function boot(){
+                  var title = currentTitle();
+                  if (hasConversation()) {
+                    if (title) localStorage.setItem(KEY, title);
+                    sessionStorage.removeItem(FLAG);
+                    return 'saved';
+                  }
+                  return restore();
+                }
+                if (document.readyState === 'loading') {
+                  document.addEventListener('DOMContentLoaded', boot);
+                } else {
+                  boot();
+                }
+              } catch(e) { return 'err'; }
+            })();
+        """.trimIndent()
         val CRYPTO_POLYFILL = """ // trimIndent 非编译期常量，故用 val
             (function(){
               try {
@@ -186,6 +253,7 @@ class MainActivity : Activity() {
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 WebViewCompat.addDocumentStartJavaScript(this, CRYPTO_POLYFILL, setOf("*"))
                 WebViewCompat.addDocumentStartJavaScript(this, MOBILE_VIEWPORT_CSS, setOf("*"))
+                WebViewCompat.addDocumentStartJavaScript(this, RESTORE_SESSION_JS, setOf("*"))
             }
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
