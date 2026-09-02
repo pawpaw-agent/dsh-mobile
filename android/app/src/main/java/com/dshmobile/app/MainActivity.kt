@@ -140,37 +140,62 @@ class MainActivity : Activity() {
         val RESTORE_SESSION_JS = """
             (function(){
               try {
-                var KEY = 'dsh.mobile.lastSessionTitle';
+                var KEY = 'dsh.mobile.lastSession';
                 var FLAG = 'dsh.mobile.restoreAttempted';
+                function currentSessionId(){
+                  try { return (localStorage.getItem('dsh.sessions.current') || ''); } catch(e) { return ''; }
+                }
                 function currentTitle(){
                   return (document.title || '').replace(/\s*—\s*DeepSeek Harness\s*$/, '').trim();
                 }
                 function hasConversation(){
                   return !!document.querySelector('[data-mobile-nav="stats"]');
                 }
+                function saveCurrent(){
+                  var sid = currentSessionId();
+                  var title = currentTitle();
+                  if (sid && title && hasConversation()) {
+                    try { localStorage.setItem(KEY, JSON.stringify({sessionId:sid,title:title})); } catch(e) {}
+                  }
+                }
+                function parseSaved(){
+                  try {
+                    var v = localStorage.getItem(KEY);
+                    if (!v) return null;
+                    var o = JSON.parse(v);
+                    return (o && o.sessionId) ? o : null;
+                  } catch(e) { return null; }
+                }
                 function findRow(title){
                   var nodes = Array.prototype.slice.call(document.querySelectorAll('*'));
                   for (var i = 0; i < nodes.length; i++) {
                     var e = nodes[i];
                     if (e.children.length === 0 && e.textContent.trim() === title) {
-                      return e.closest('[class*="sessionRow"]') || e.parentElement || null;
+                      var row = e.closest('[class*="sessionRow"]') || e.parentElement || null;
+                      if (row) return row;
                     }
                   }
                   return null;
                 }
+                function openRow(row){
+                  try { row.click(); } catch(e) {}
+                }
                 function restore(){
-                  var saved = localStorage.getItem(KEY);
-                  if (!saved || sessionStorage.getItem(FLAG)) return 'skip';
+                  var saved = parseSaved();
+                  if (!saved) return 'no-saved';
+                  if (sessionStorage.getItem(FLAG)) return 'already';
                   sessionStorage.setItem(FLAG, '1');
-                  var tries = 0;
+                  var opened = false;
                   var expanded = false;
+                  var tries = 0;
                   var timer = setInterval(function(){
                     tries++;
-                    var row = findRow(saved);
-                    if (row) {
-                      row.click();
-                      clearInterval(timer);
-                      return;
+                    if (hasConversation() && currentSessionId() === saved.sessionId) {
+                      clearInterval(timer); return;
+                    }
+                    var row = findRow(saved.title);
+                    if (row && !opened) {
+                      openRow(row); opened = true; clearInterval(timer); return;
                     }
                     if (!expanded) {
                       expanded = true;
@@ -178,14 +203,15 @@ class MainActivity : Activity() {
                         try { el.click(); } catch(e) {}
                       });
                     }
-                    if (tries > 25) clearInterval(timer);
+                    if (tries > 30) clearInterval(timer);
                   }, 300);
-                  return 'restoring';
+                  return 'none';
                 }
                 function boot(){
+                  var sid = currentSessionId();
                   var title = currentTitle();
                   if (hasConversation()) {
-                    if (title) localStorage.setItem(KEY, title);
+                    saveCurrent();
                     sessionStorage.removeItem(FLAG);
                     return 'saved';
                   }
@@ -196,9 +222,12 @@ class MainActivity : Activity() {
                 } else {
                   boot();
                 }
+                // 周期性保存：防止用户在会话内停留后标题/session 变化没及时记录
+                setInterval(saveCurrent, 2000);
               } catch(e) { return 'err'; }
             })();
         """.trimIndent()
+
         val CRYPTO_POLYFILL = """ // trimIndent 非编译期常量，故用 val
             (function(){
               try {
