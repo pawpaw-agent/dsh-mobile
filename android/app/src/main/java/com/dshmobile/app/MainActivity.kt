@@ -100,6 +100,10 @@ class MainActivity : Activity() {
                 style.textContent = `
                   html, body, #root { height: 100vh !important; height: 100dvh !important; min-height: 100vh !important; min-height: 100dvh !important; max-height: 100vh !important; max-height: 100dvh !important; }
                   html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !important; overflow-x: hidden !important; overflow-y: hidden !important; }
+                  /* 已全屏隐藏状态栏：去掉 dsh 移动端为“安全区”预留的顶部空白 */
+                  [data-mobile-nav="frame"] { padding-top: 0 !important; }
+                  [data-mobile-nav="frame"] > :first-child { padding-top: 0 !important; }
+                  [data-phase="active"] [data-slot="conversation.session.header"] > header { padding-top: 0 !important; }
                   [data-slot="conversation"], [data-slot="sidebar"] { height: 100vh !important; height: 100dvh !important; max-height: 100vh !important; max-height: 100dvh !important; }
                   [data-slot="conversation"] { overflow-y: auto !important; }
                   [data-composer-card] { padding-bottom: max(8px, env(safe-area-inset-bottom)) !important; }
