@@ -143,7 +143,14 @@ class MainActivity : Activity() {
                 var KEY = 'dsh.mobile.lastSession';
                 var FLAG = 'dsh.mobile.restoreAttempted';
                 function currentSessionId(){
-                  try { return (localStorage.getItem('dsh.sessions.current') || ''); } catch(e) { return ''; }
+                  try {
+                    var raw = localStorage.getItem('dsh.sessions.current') || '';
+                    if (!raw) return '';
+                    try {
+                      var o = JSON.parse(raw);
+                      return (o && o.sessionId) ? o.sessionId : raw;
+                    } catch(e) { return raw; }
+                  } catch(e) { return ''; }
                 }
                 function currentTitle(){
                   return (document.title || '').replace(/\s*—\s*DeepSeek Harness\s*$/, '').trim();
