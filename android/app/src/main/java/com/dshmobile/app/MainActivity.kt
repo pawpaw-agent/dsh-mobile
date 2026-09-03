@@ -187,12 +187,19 @@ class MainActivity : Activity() {
                 function openRow(row){
                   try { row.click(); } catch(e) {}
                 }
+                function openDrawer(){
+                  var fab = document.querySelector('[data-mobile-nav="fab"]');
+                  if (fab) { try { fab.click(); } catch(e) {} }
+                  var toggle = document.querySelector('[data-mobile-nav="toggle"]');
+                  if (toggle) { try { toggle.click(); } catch(e) {} }
+                }
                 function restore(){
                   var saved = parseSaved();
                   if (!saved) return 'no-saved';
                   if (sessionStorage.getItem(FLAG)) return 'already';
                   sessionStorage.setItem(FLAG, '1');
                   var opened = false;
+                  var drawerOpened = false;
                   var expanded = false;
                   var tries = 0;
                   var timer = setInterval(function(){
@@ -204,15 +211,18 @@ class MainActivity : Activity() {
                     if (row && !opened) {
                       openRow(row); opened = true; clearInterval(timer); return;
                     }
-                    if (!expanded) {
+                    if (tries === 2) {
+                      openDrawer();
+                    }
+                    if (!expanded && tries >= 4) {
                       expanded = true;
                       Array.prototype.slice.call(document.querySelectorAll('[class*="YDXeBa_projectRow"]')).forEach(function(el){
                         try { el.click(); } catch(e) {}
                       });
                     }
-                    if (tries > 30) clearInterval(timer);
+                    if (tries > 40) clearInterval(timer);
                   }, 300);
-                  return 'none';
+                  return 'restoring';
                 }
                 function boot(){
                   var sid = currentSessionId();
