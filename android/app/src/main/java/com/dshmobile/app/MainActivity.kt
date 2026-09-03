@@ -141,10 +141,10 @@ class MainActivity : Activity() {
             (function(){
               try {
                 var KEY = 'dsh.mobile.lastSession';
-                var FLAG = 'dsh.mobile.restoreAttempted';
+                var CURRENT = 'dsh.sessions.current';
                 function currentSessionId(){
                   try {
-                    var raw = localStorage.getItem('dsh.sessions.current') || '';
+                    var raw = localStorage.getItem(CURRENT) || '';
                     if (!raw) return '';
                     try {
                       var o = JSON.parse(raw);
@@ -158,13 +158,6 @@ class MainActivity : Activity() {
                 function hasConversation(){
                   return !!document.querySelector('[data-mobile-nav="stats"]');
                 }
-                function saveCurrent(){
-                  var sid = currentSessionId();
-                  var title = currentTitle();
-                  if (sid && title && hasConversation()) {
-                    try { localStorage.setItem(KEY, JSON.stringify({sessionId:sid,title:title})); } catch(e) {}
-                  }
-                }
                 function parseSaved(){
                   try {
                     var v = localStorage.getItem(KEY);
@@ -173,63 +166,27 @@ class MainActivity : Activity() {
                     return (o && o.sessionId) ? o : null;
                   } catch(e) { return null; }
                 }
-                function findRow(title){
-                  var nodes = Array.prototype.slice.call(document.querySelectorAll('*'));
-                  for (var i = 0; i < nodes.length; i++) {
-                    var e = nodes[i];
-                    if (e.children.length === 0 && e.textContent.trim() === title) {
-                      var row = e.closest('[class*="sessionRow"]') || e.parentElement || null;
-                      if (row) return row;
-                    }
-                  }
-                  return null;
-                }
-                function openRow(row){
-                  try { row.click(); } catch(e) {}
-                }
-                function openDrawer(){
-                  var fab = document.querySelector('[data-mobile-nav="fab"]');
-                  if (fab) { try { fab.click(); } catch(e) {} }
-                  var toggle = document.querySelector('[data-mobile-nav="toggle"]');
-                  if (toggle) { try { toggle.click(); } catch(e) {} }
-                }
                 function restore(){
                   var saved = parseSaved();
                   if (!saved) return 'no-saved';
-                  if (sessionStorage.getItem(FLAG)) return 'already';
-                  sessionStorage.setItem(FLAG, '1');
-                  var opened = false;
-                  var drawerOpened = false;
-                  var expanded = false;
-                  var tries = 0;
-                  var timer = setInterval(function(){
-                    tries++;
-                    if (hasConversation() && currentSessionId() === saved.sessionId) {
-                      clearInterval(timer); return;
-                    }
-                    var row = findRow(saved.title);
-                    if (row && !opened) {
-                      openRow(row); opened = true; clearInterval(timer); return;
-                    }
-                    if (tries === 2) {
-                      openDrawer();
-                    }
-                    if (!expanded && tries >= 4) {
-                      expanded = true;
-                      Array.prototype.slice.call(document.querySelectorAll('[class*="YDXeBa_projectRow"]')).forEach(function(el){
-                        try { el.click(); } catch(e) {}
-                      });
-                    }
-                    if (tries > 40) clearInterval(timer);
-                  }, 300);
-                  return 'restoring';
+                  var current = currentSessionId();
+                  if (current === saved.sessionId) return 'already';
+                  // 直接改写 dsh 的当前会话持久化值。dsh 启动时的 initial selection
+                  // 会读取它并自动 open 对应会话，无需模拟点击或操作侧边栏。
+                  try { localStorage.setItem(CURRENT, JSON.stringify({sessionId: saved.sessionId})); } catch(e) {}
+                  return 'restore-set';
                 }
-                function boot(){
+                function saveCurrent(){
                   var sid = currentSessionId();
                   var title = currentTitle();
+                  if (sid && title && hasConversation()) {
+                    try { localStorage.setItem(KEY, JSON.stringify({sessionId:sid,title:title})); } catch(e) {}
+                  }
+                }
+                function boot(){
                   if (hasConversation()) {
                     saveCurrent();
-                    sessionStorage.removeItem(FLAG);
+                    sessionStorage.removeItem('dsh.mobile.restoreAttempted');
                     return 'saved';
                   }
                   return restore();
@@ -239,7 +196,6 @@ class MainActivity : Activity() {
                 } else {
                   boot();
                 }
-                // 周期性保存：防止用户在会话内停留后标题/session 变化没及时记录
                 setInterval(saveCurrent, 2000);
               } catch(e) { return 'err'; }
             })();
