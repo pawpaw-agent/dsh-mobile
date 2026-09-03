@@ -14,7 +14,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -140,8 +139,9 @@ class MainActivity : Activity() {
 
         // 会话状态恢复：dsh SPA 重新加载后会落在 hero/首页，不会自动打开上次的会话。
         // 这里在页面加载后：
-        //   1. 如果当前是会话页，保存会话标题；
-        //   2. 如果当前是首页且本地有上次标题，自动打开侧边栏并点击对应会话行。
+        //   1. 如果当前是会话页，保存会话标题与 sessionId；
+        //   2. 如果当前是首页，直接改写 dsh.sessions.current，
+        //      由 dsh 自己的 initial selection 自动打开上次会话（不模拟点击）。
         val RESTORE_SESSION_JS = """
             (function(){
               try {
@@ -191,7 +191,6 @@ class MainActivity : Activity() {
                 function boot(){
                   if (hasConversation()) {
                     saveCurrent();
-                    sessionStorage.removeItem('dsh.mobile.restoreAttempted');
                     return 'saved';
                   }
                   return restore();
@@ -248,12 +247,11 @@ class MainActivity : Activity() {
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
-                databaseEnabled = true
                 allowFileAccess = false
                 allowContentAccess = false
-                builtInZoomControls = true
+                builtInZoomControls = false
                 displayZoomControls = false
-                setSupportZoom(true)
+                setSupportZoom(false)
                 loadWithOverviewMode = true
                 useWideViewPort = true
             }

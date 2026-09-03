@@ -42,9 +42,6 @@ class SshTunnel(
     private val remoteHost: String,
     private val remotePort: Int,
     private val auth: Auth,
-    /** 期望的远端主机公钥指纹（SHA256，"SHA256:xxxx"）。为空则信任任意（首连 TOFU 语义）。 */
-    @Suppress("UNUSED_PARAMETER")
-    private val expectedFingerprint: String? = null
 ) : Closeable {
 
     sealed class Auth {
@@ -170,8 +167,7 @@ class SshTunnel(
                 sshUser = o.getString("sshUser"),
                 remoteHost = o.optString("remoteHost", "127.0.0.1"),
                 remotePort = o.optInt("remotePort", 3080),
-                auth = auth,
-                expectedFingerprint = o.optString("fingerprint").ifEmpty { null }
+                auth = auth
             )
         }
     }
