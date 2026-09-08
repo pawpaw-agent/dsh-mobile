@@ -41,8 +41,9 @@ cd dropbear
 
 # Apply the Android-specific options (disables server password auth: crypt()
 # is unavailable on Android; keeps client DROPBEAR_PASSWORD env auth).
-# localoptions.h lives next to this script (scripts/localoptions.h).
-cp "$(dirname "$0")/localoptions.h" .
+# Resolve this script's dir absolutely — CWD changes after `cd dropbear`.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cp "$SCRIPT_DIR/localoptions.h" .
 
 make PROGRAMS="$BUILD_ONLY"
 
