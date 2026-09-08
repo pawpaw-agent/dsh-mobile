@@ -10,12 +10,18 @@
 #   [DROPBEAR_VERSION=DROPBEAR_2026.94] [BUILD_ONLY=dbclient]
 #
 # Output: ./build-dropbear-output/{dbclient,LICENSE.txt}
+#
+# Always run from this script's own directory (resolved absolutely),
+# so paths (localoptions.h, output dir) stay valid after `cd dropbear`.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 TARGET=${TARGET:-aarch64-linux-android}
 PLATFORM=21
 DROPBEAR_VERSION=${DROPBEAR_VERSION:-DROPBEAR_2026.94}
 BUILD_ONLY=${BUILD_ONLY:-dbclient}
-OUTDIR=${OUTDIR:-build-dropbear-output}
+OUTDIR=${OUTDIR:-"$PROJECT_ROOT/build-dropbear-output"}
 
 if [ -z "$ANDROID_NDK_HOME" ]; then
     echo "ANDROID_NDK_HOME is not set" >&2
@@ -41,9 +47,8 @@ cd dropbear
 
 # Apply the Android-specific options (disables server password auth: crypt()
 # is unavailable on Android; keeps client DROPBEAR_PASSWORD env auth).
-# Resolve this script's dir absolutely — CWD changes after `cd dropbear`.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cp "$SCRIPT_DIR/localoptions.h" .
+# Script already cd'd to its own dir, so localoptions.h is local.
+cp localoptions.h .
 
 make PROGRAMS="$BUILD_ONLY"
 
