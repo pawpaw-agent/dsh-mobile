@@ -1,6 +1,0 @@
-<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
-<map>
-    <string name="ssh_json">{&quot;sshHost&quot;:&quot;192.168.0.135&quot;,&quot;sshPort&quot;:22,&quot;sshUser&quot;:&quot;xsj&quot;,&quot;remoteHost&quot;:&quot;127.0.0.1&quot;,&quot;remotePort&quot;:3080,&quot;authType&quot;:&quot;password&quot;,&quot;password&quot;:&quot;23499349&quot;}</string>
-    <boolean name="ssh_enabled" value="true" />
-    <string name="url">http://127.0.0.1:3080</string>
-</map>
