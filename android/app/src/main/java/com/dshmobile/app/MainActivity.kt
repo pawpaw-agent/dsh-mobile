@@ -773,12 +773,15 @@ class MainActivity : Activity() {
      * 取最后一行 = 当前进程的 token）。
      */
     private fun autoFetchToken(tunnel: SshTunnel): String? {
+        // SSH 非交互会话通常没有 XDG_RUNTIME_DIR，而 journalctl --user 依赖它
+        // 定位用户会话的 systemd 实例 —— 显式导出（UID 1000 为主流桌面/服务器用户）。
+        val xdg = "export XDG_RUNTIME_DIR=/run/user/$(id -u 2>/dev/null || echo 1000); "
         val commands = arrayOf(
             // 候选 1：dsh-web service（systemd user unit，最常见部署）
-            "journalctl --user -u dsh-web.service -n 200 --no-pager 2>/dev/null " +
+            "$xdg journalctl --user -u dsh-web.service -n 200 --no-pager 2>/dev/null " +
                 "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2",
             // 候选 2：全量 user journal（Unit 名不同/非 systemd user unit 时兜底）
-            "journalctl --user -n 500 --no-pager 2>/dev/null " +
+            "$xdg journalctl --user -n 500 --no-pager 2>/dev/null " +
                 "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2",
             // 候选 3：常见日志文件（手动 nohup 等部署）
             "for f in ~/.dsh/web.log ~/.dsh/web_log ~/.dsh/dsh-web.log; do " +
