@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -76,6 +77,7 @@ class MainActivity : Activity() {
 
     private companion object {
         // 黑白色调
+        const val TAG = "DshMobile"
         const val COL_BG = 0xFF0A0A0E.toInt()
         const val COL_SURFACE = 0xFF101015.toInt()
         const val COL_TEXT = 0xFFF5F5F7.toInt()
@@ -787,13 +789,17 @@ class MainActivity : Activity() {
             "for f in ~/.dsh/web.log ~/.dsh/web_log ~/.dsh/dsh-web.log; do " +
                 "grep -oE 'token=[A-Za-z0-9_-]+' \"\$f\" 2>/dev/null; done | tail -1 | cut -d= -f2"
         )
-        for (cmd in commands) {
-            val token = tunnel.execOnce(cmd)?.trim()
+        for ((i, cmd) in commands.withIndex()) {
+            val out = tunnel.execOnce(cmd)
+            Log.i(TAG, "autoFetchToken: cmd#$i rc=${if (out == null) "null" else "len=" + out.length}")
+            val token = out?.trim()
             if (!token.isNullOrEmpty() && token.length >= 40) {
+                Log.i(TAG, "autoFetchToken: SUCCESS len=${token.length} prefix=${token.take(8)}…")
                 prefs.edit().putString(PREF_SERVER_TOKEN, token).apply()
                 return token
             }
         }
+        Log.w(TAG, "autoFetchToken: all commands failed/long-empty; fall back to manual token")
         return null
     }
 

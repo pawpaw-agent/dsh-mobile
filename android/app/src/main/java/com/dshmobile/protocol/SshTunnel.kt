@@ -154,12 +154,15 @@ class SshTunnel(
             val jsch = JSch()
             val s = buildSession(jsch)
             s.connect(10_000)
+            Log.i(TAG, "openShell: session connected to $sshHost:$sshPort")
             val channel = s.openChannel("shell") as com.jcraft.jsch.ChannelShell
             channel.setPtyType(termType)
             channel.setPtySize(cols, rows, 0, 0)
             // 先连接再启动输出泵，避免读到未连接通道的流而误报退出
             channel.connect(10_000)
+            Log.i(TAG, "openShell: channel connected (pty=$termType ${cols}x${rows})")
             // 输出流逐块转发（Termux terminal-emulator 的 write() 消费）
+            var totalBytes = 0L
             val pump = Thread {
                 try {
                     val input = channel.inputStream
@@ -167,17 +170,23 @@ class SshTunnel(
                     while (!channel.isClosed && !channel.isEOF) {
                         val n = try { input.read(buf) } catch (_: Exception) { -1 }
                         if (n <= 0) break
+                        totalBytes += n
+                        if (totalBytes < 65536 || totalBytes % 65536 == 0L) {
+                            Log.i(TAG, "openShell: received ${totalBytes}B so far (chunk=$n)")
+                        }
                         onData(buf.copyOf(n))
                     }
                 } finally {
+                    Log.i(TAG, "openShell: pump exit, total=${totalBytes}B exitStatus=${channel.exitStatus}")
                     onExit(channel.exitStatus)
                 }
             }.apply { isDaemon = true; name = "dsh-shell-pump"; start() }
             val handle = ShellHandle(channel, s, ::sendShellBytes)
             onReady(handle)
+            Log.i(TAG, "openShell: onReady delivered (rc=${channel.exitStatus})")
             handle
         } catch (e: Exception) {
-            Log.w(TAG, "open shell failed: ${e.message}")
+            Log.w(TAG, "openShell: failed: ${e.message}", e)
             onExit(-1)
             null
         }

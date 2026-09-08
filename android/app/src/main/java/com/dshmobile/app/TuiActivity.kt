@@ -3,6 +3,7 @@ package com.dshmobile.app
 import android.app.Activity
 import android.graphics.Typeface
 import android.os.Bundle
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -45,6 +46,7 @@ class TuiActivity : Activity() {
     @Volatile private var ctrlDown = false
 
     private companion object {
+        const val TAG = "TuiActivity"
         const val COL_BG = 0xFF0A0A0E.toInt()
         const val COL_TEXT = 0xFFF5F5F7.toInt()
         const val COL_MUTED = 0x99FFFFFF.toInt()
@@ -83,7 +85,9 @@ class TuiActivity : Activity() {
             val defaultPx = (15 * density).toInt()
             val savedPx = getSharedPreferences("dsh-mobile", MODE_PRIVATE)
                 .getInt("tui_font_size_px", defaultPx)
-            setTextSize(savedPx.coerceIn((12 * density).toInt(), (36 * density).toInt()))
+            val finalPx = savedPx.coerceIn((12 * density).toInt(), (36 * density).toInt())
+            Log.i(TAG, "init font: density=$density default=${defaultPx}px saved=${savedPx}px final=${finalPx}px")
+            setTextSize(finalPx)
             setTypeface(Typeface.MONOSPACE)
             // 官方标准路径：TerminalSession 附带一个无害的本地进程
             // （/system/bin/sh -c 纯 shell 内置循环，不依赖 sleep 等外部命令），
@@ -258,6 +262,7 @@ class TuiActivity : Activity() {
                 onReady = { h ->
                     runOnUiThread {
                         shell = h
+                        Log.i(TAG, "SSH onReady: shell attached, starting emulator retry")
                         // 竞态防护：SSH onReady 可能早于 view 布局/session 初始化
                         // （getEmulator() 为 null）。挂在 view 的消息队列上，等
                         // onSizeChanged 完成后再取 emulator；若仍为 null 则轮询几轮。
@@ -270,18 +275,25 @@ class TuiActivity : Activity() {
                 onData = { data ->
                     runOnUiThread {
                         val emu = emulator
-                        if (emu != null) emu.append(data, data.size)
-                        else pendingBytes.write(data)  // 引擎未就绪时缓存
+                        if (emu != null) {
+                            emu.append(data, data.size)
+                            Log.v(TAG, "onData: ${data.size}B -> emulator")
+                        } else {
+                            pendingBytes.write(data)
+                            Log.i(TAG, "onData: ${data.size}B buffered (emulator not ready, ${pendingBytes.size()}B total)")
+                        }
                     }
                 },
                 onExit = { code ->
                     runOnUiThread {
+                        Log.w(TAG, "SSH onExit: code=$code")
                         statusView?.text = "连接断开（exit=$code）"
                         statusView?.visibility = View.VISIBLE
                     }
                 }
             )
             if (handle == null) {
+                Log.w(TAG, "SSH connect failed (openShell returned null)")
                 runOnUiThread { statusView?.text = "SSH 连接失败（主机/端口/认证）" }
             }
         }.start()
@@ -301,12 +313,17 @@ class TuiActivity : Activity() {
             val buffered = pendingBytes.toByteArray()
             if (buffered.isNotEmpty()) {
                 emu.append(buffered, buffered.size)
+                Log.i(TAG, "emulator ready at attempt=$attempt; replayed ${buffered.size}B buffered")
                 pendingBytes.reset()
+            } else {
+                Log.i(TAG, "emulator ready at attempt=$attempt; no buffered data")
             }
             v.invalidate()
             return
         }
+        Log.i(TAG, "emulator not ready, attempt=$attempt/20")
         if (attempt >= 20) {
+            Log.w(TAG, "emulator never ready after 20 retries")
             statusView?.text = "终端引擎未就绪（布局未完成）"
             statusView?.visibility = View.VISIBLE
             return
