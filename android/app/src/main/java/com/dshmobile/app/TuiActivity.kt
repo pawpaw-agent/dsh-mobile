@@ -73,7 +73,8 @@ class TuiActivity : Activity() {
             )
         }
         terminalView = TerminalView(this, null).apply {
-            setTextSize(11)
+            // 手机屏幕字号：11 在 1080p 全屏终端下过小（Termux 默认 12，手机建议 14）
+            setTextSize(14)
             setTypeface(Typeface.MONOSPACE)
             // 官方标准路径：TerminalSession 附带一个无害的本地进程
             // （/system/bin/sh -c 纯 shell 内置循环，不依赖 sleep 等外部命令），
