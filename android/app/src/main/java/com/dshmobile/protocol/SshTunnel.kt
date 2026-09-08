@@ -156,6 +156,10 @@ class SshTunnel(
             s.connect(10_000)
             Log.i(TAG, "openShell: session connected to $sshHost:$sshPort")
             val channel = s.openChannel("shell") as com.jcraft.jsch.ChannelShell
+            // 显式开启 PTY：不同 JSch 版本 ChannelShell 的 pty 默认值不同，
+            // 不显式 setPty(true) 时 pty-req 可能从未发送 → sshd 无 pty →
+            // 非交互 shell、会话随启动立即关闭（"session opened/closed" 成对出现）。
+            channel.setPty(true)
             channel.setPtyType(termType)
             channel.setPtySize(cols, rows, 0, 0)
             // 先连接再启动输出泵，避免读到未连接通道的流而误报退出
@@ -176,8 +180,10 @@ class SshTunnel(
                         }
                         onData(buf.copyOf(n))
                     }
+                } catch (e: Exception) {
+                    Log.w(TAG, "openShell: pump error: ${e.message}", e)
                 } finally {
-                    Log.i(TAG, "openShell: pump exit, total=${totalBytes}B exitStatus=${channel.exitStatus}")
+                    Log.i(TAG, "openShell: pump exit, total=${totalBytes}B exitStatus=${channel.exitStatus} isClosed=${channel.isClosed} isEOF=${channel.isEOF} connected=${channel.isConnected}")
                     onExit(channel.exitStatus)
                 }
             }.apply { isDaemon = true; name = "dsh-shell-pump"; start() }
@@ -215,6 +221,9 @@ class SshTunnel(
                 sess
             }
         }
+        // 会话保活：30s 发一次 alive 探测（shutdown 时清理），60s 无响应判死
+        s.setServerAliveInterval(30_000)
+        s.setServerAliveCountMax(2)
         return s
     }
 
