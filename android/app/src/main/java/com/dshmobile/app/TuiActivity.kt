@@ -39,6 +39,9 @@ class TuiActivity : Activity() {
     private var shell: SshTunnel.ShellHandle? = null
     private var tunnel: SshTunnel? = null
     private var statusView: TextView? = null
+
+    /** 终端引擎未就绪期间收到的 SSH 输出（就绪后重放，防丢首屏提示符）。 */
+    private val pendingBytes = java.io.ByteArrayOutputStream()
     @Volatile private var ctrlDown = false
 
     private companion object {
@@ -73,13 +76,13 @@ class TuiActivity : Activity() {
             setTextSize(11)
             setTypeface(Typeface.MONOSPACE)
             // 官方标准路径：TerminalSession 附带一个无害的本地进程
-            // （/system/bin/sh -c while 循环），正常初始化 TerminalEmulator
-            // （含 JNI pty），Termux 的所有生命周期
+            // （/system/bin/sh -c 纯 shell 内置循环，不依赖 sleep 等外部命令），
+            // 正常初始化 TerminalEmulator（含 JNI pty），Termux 的所有生命周期
             // （updateSize/渲染/滚动/光标）走原生实现。
             // SSH 字节流绕过本地 pty：远端输出直接喂 session.getEmulator().append()，
             // 键盘输入经 TerminalViewClient 桥到 SSH shell（绝不写 session——那会写本地 pty）。
             val session = TerminalSession(
-                "/system/bin/sh", "/", arrayOf("-c", "while true; do sleep 60; done"), null, 5000,
+                "/system/bin/sh", "/", arrayOf("-c", "while true; do :; done"), null, 5000,
                 object : TerminalSessionClient {
                     override fun onTextChanged(changedSession: TerminalSession) {}
                     override fun onTitleChanged(changedSession: TerminalSession) {}
@@ -241,14 +244,21 @@ class TuiActivity : Activity() {
                 onReady = { h ->
                     runOnUiThread {
                         shell = h
-                        setupEmulator(h)
+                        // 竞态防护：SSH onReady 可能早于 view 布局/session 初始化
+                        // （getEmulator() 为 null）。挂在 view 的消息队列上，等
+                        // onSizeChanged 完成后再取 emulator；若仍为 null 则轮询几轮。
+                        retrySetupEmulator(h, 0)
                         statusView?.visibility = View.GONE
                         // 纯 SSH 终端：进入后是普通远程 shell，不自动启动任何应用
                         // （需要时在终端里手动输入 dsh-tui 即可）
                     }
                 },
                 onData = { data ->
-                    runOnUiThread { emulator?.append(data, data.size) }
+                    runOnUiThread {
+                        val emu = emulator
+                        if (emu != null) emu.append(data, data.size)
+                        else pendingBytes.write(data)  // 引擎未就绪时缓存
+                    }
                 },
                 onExit = { code ->
                     runOnUiThread {
@@ -263,15 +273,31 @@ class TuiActivity : Activity() {
         }.start()
     }
 
-    /** SSH 就绪后挂接渲染：拿 session 的 emulator（Termux 原生初始化），SSH 输出直接 append。 */
-    private fun setupEmulator(handle: SshTunnel.ShellHandle) {
+    /**
+     * 挂接渲染：拿 session 的 emulator（Termux 原生初始化），SSH 输出直接 append。
+     * session 的 emulator 由 onSizeChanged→updateSize→initializeEmulator 创建，
+     * 与 SSH 握手存在竞态：若尚未就绪，用 post{} 延迟重试（最多 20 轮 × 500ms）。
+     */
+    private fun retrySetupEmulator(handle: SshTunnel.ShellHandle, attempt: Int) {
         val v = terminalView ?: return
-        val session = v.mTermSession ?: return
-        val emu = session.getEmulator() ?: run { statusView?.text = "emulator 未初始化"; return }
-        emulator = emu
-        // TerminalSession 内部线程读本地 pty（sleep 进程，无输出），不影响；
-        // 真正的远端输出由 onData 直接 append 到这个 emulator。
-        v.invalidate()
+        val emu = v.mTermSession?.getEmulator()
+        if (emu != null) {
+            emulator = emu
+            // 重放引擎就绪前缓存的 SSH 输出（提示符等首屏数据）
+            val buffered = pendingBytes.toByteArray()
+            if (buffered.isNotEmpty()) {
+                emu.append(buffered, buffered.size)
+                pendingBytes.reset()
+            }
+            v.invalidate()
+            return
+        }
+        if (attempt >= 20) {
+            statusView?.text = "终端引擎未就绪（布局未完成）"
+            statusView?.visibility = View.VISIBLE
+            return
+        }
+        v.postDelayed({ retrySetupEmulator(handle, attempt + 1) }, 500)
     }
 
     /** 底部常驻键排（Termux extra-keys 思路；覆盖 dsh-tui 高频键）。 */
