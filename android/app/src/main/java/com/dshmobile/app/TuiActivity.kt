@@ -277,7 +277,10 @@ class TuiActivity : Activity() {
                         val emu = emulator
                         if (emu != null) {
                             emu.append(data, data.size)
-                            Log.v(TAG, "onData: ${data.size}B -> emulator")
+                            // 关键：Termux emulator 是手动渲染，append 后必须
+                            // invalidate 才会触发 onDraw（否则画面停留黑/旧帧）
+                            terminalView?.invalidate()
+                            Log.v(TAG, "onData: ${data.size}B -> emulator + invalidate")
                         } else {
                             pendingBytes.write(data)
                             Log.i(TAG, "onData: ${data.size}B buffered (emulator not ready, ${pendingBytes.size()}B total)")
