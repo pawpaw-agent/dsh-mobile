@@ -73,8 +73,11 @@ class TuiActivity : Activity() {
             )
         }
         terminalView = TerminalView(this, null).apply {
-            // 手机屏幕字号：11 在 1080p 全屏终端下过小（Termux 默认 12，手机建议 14）
-            setTextSize(14)
+            // 手机全屏终端字号：11/14 在 1080p 下都偏小。18sp 为舒适默认，
+            // 可从键排 A+/A- 调节（持久化到 prefs tui_font_size）。
+            val savedSize = getSharedPreferences("dsh-mobile", MODE_PRIVATE)
+                .getInt("tui_font_size", 18)
+            setTextSize(savedSize.coerceIn(12, 32))
             setTypeface(Typeface.MONOSPACE)
             // 官方标准路径：TerminalSession 附带一个无害的本地进程
             // （/system/bin/sh -c 纯 shell 内置循环，不依赖 sleep 等外部命令），
@@ -326,8 +329,22 @@ class TuiActivity : Activity() {
             // 若远端 TERM_PROGRAM 配置为 kitty/iTerm2 等，此键输出即被识别。
             addView(key("CTRL⏎") { shell?.write("\u001b[13;5u") })
             addView(key("⏎", weight = 2f) { shell?.write("\r") })
+            // 字号调节（持久化，覆盖 12–32）：A+ 放大、A- 缩小
+            addView(key("A+") { adjustFont(2) })
+            addView(key("A-") { adjustFont(-2) })
         }
         return row
+    }
+
+    /** 调整终端字号并持久化（范围 12–32）；变化后视图自动重排。 */
+    private fun adjustFont(delta: Int) {
+        val v = terminalView ?: return
+        val cur = getSharedPreferences("dsh-mobile", MODE_PRIVATE)
+            .getInt("tui_font_size", 18)
+        val next = (cur + delta).coerceIn(12, 32)
+        getSharedPreferences("dsh-mobile", MODE_PRIVATE)
+            .edit().putInt("tui_font_size", next).apply()
+        v.setTextSize(next)
     }
 
     /**
