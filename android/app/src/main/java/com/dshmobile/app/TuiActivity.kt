@@ -203,6 +203,7 @@ class TuiActivity : Activity() {
 
     /** 返回可用的私钥路径；若无导入密钥则用 dropbearkey 生成（并提示公钥）。 */
     private fun resolveKeyPath(): String? {
+        val libDir = applicationInfo.nativeLibraryDir
         // 1) 连接屏导入的私钥
         val imported = getSharedPreferences("dsh-mobile", MODE_PRIVATE)
             .getString("ssh_json", null)?.let {
@@ -214,7 +215,6 @@ class TuiActivity : Activity() {
         val dir = filesDir
         val key = File(dir, KEY_NAME)
         if (!key.exists()) {
-            val libDir = applicationInfo.nativeLibraryDir
             val dbkey = File(libDir, "libdropbearkey.so")
             if (!dbkey.exists()) return null
             val gen = ProcessBuilder(dbkey.absolutePath, "-t", "ed25519", "-f", key.absolutePath)

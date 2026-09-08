@@ -20,7 +20,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 TARGET=${TARGET:-aarch64-linux-android}
 PLATFORM=21
 DROPBEAR_VERSION=${DROPBEAR_VERSION:-DROPBEAR_2026.94}
-BUILD_ONLY=${BUILD_ONLY:-dbclient}
+BUILD_ONLY=${BUILD_ONLY:-"dbclient dropbearkey"}
 OUTDIR=${OUTDIR:-"$PROJECT_ROOT/build-dropbear-output"}
 
 if [ -z "$ANDROID_NDK_HOME" ]; then
