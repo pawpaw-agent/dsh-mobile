@@ -75,6 +75,11 @@ class TuiActivity : Activity() {
             )
         }
         terminalView = TerminalView(this, null).apply {
+            // Termux 布局里设置了 focusable/focusableInTouchMode（否则 InputConnection
+            // 不生效、软键盘无法弹出）；代码创建需手动开启，并关闭默认焦点高亮。
+            isFocusable = true
+            isFocusableInTouchMode = true
+            defaultFocusHighlightEnabled = false
             // 重要：Termux TerminalView.setTextSize(int) 直接把数值传给
             // Paint.setTextSize() —— 单位是 **px**（非 sp/dp，其 KDoc 的
             // "density-independent pixels" 是误导）。18px 在 1080p/3 密度屏
@@ -124,11 +129,17 @@ class TuiActivity : Activity() {
         }
         terminalView?.setTerminalViewClient(object : TerminalViewClient {
             override fun onScale(scale: Float): Float = 1f
-            // 点击终端区域：请求焦点（Termux 同款 —— 焦点是软键盘弹出的前提），
-            // 并确保光标闪烁激活（幂等）
+            // 点击终端区域：请求焦点 + 显式拉起软键盘（Termux 做法：
+            // requestFocus 只聚焦，键盘要 showSoftInput 才弹；且需 windowSoftInputMode
+            // 配合。500ms 延迟避免焦点/窗口未稳时 show 被忽略）。
             override fun onSingleTapUp(e: android.view.MotionEvent) {
-                terminalView?.requestFocus()
-                terminalView?.setTerminalCursorBlinkerState(true, true)
+                val tv = terminalView
+                tv?.requestFocus()
+                tv?.postDelayed({
+                    val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+                            as android.view.inputmethod.InputMethodManager
+                    imm.showSoftInput(tv, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                }, 100)
             }
             override fun shouldBackButtonBeMappedToEscape(): Boolean = false
             override fun shouldEnforceCharBasedInput(): Boolean = false
