@@ -90,6 +90,7 @@ class TuiActivity : Activity() {
                     override fun onBell(session: TerminalSession) {}
                     override fun onColorsChanged(session: TerminalSession) {}
                     override fun onTerminalCursorStateChange(state: Boolean) {}
+                    override fun getTerminalCursorStyle(): Int = 0
                     override fun logError(tag: String, message: String) {}
                     override fun logWarn(tag: String, message: String) {}
                     override fun logInfo(tag: String, message: String) {}
@@ -108,7 +109,7 @@ class TuiActivity : Activity() {
             override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
             override fun isTerminalViewSelected(): Boolean = true
             override fun copyModeChanged(copyMode: Boolean) {}
-            override fun onLongPress(event: android.view.MotionEvent) {}
+            override fun onLongPress(event: android.view.MotionEvent): Boolean = false
 
             override fun onKeyDown(keyCode: Int, e: android.view.KeyEvent, session: TerminalSession): Boolean {
                 // 键盘事件直接桥到 SSH shell（不经 TerminalSession.write——那是本地进程队列）
@@ -171,8 +172,8 @@ class TuiActivity : Activity() {
         }
         // 普通字符：取 KeyEvent 的字符（软键盘输入路径）
         val ch = e.unicodeChar
-        if (ch != 0 && ch != '\u0000' && ch.code in 32..0x10ffff) {
-            return ch.toString().toByteArray(Charsets.UTF_8)
+        if (ch != 0 && ch in 32..0x10ffff) {
+            return String(Character.toChars(ch)).toByteArray(Charsets.UTF_8)
         }
         return null
     }
@@ -249,7 +250,7 @@ class TuiActivity : Activity() {
                     }
                 },
                 onData = { data ->
-                    runOnUiThread { emulator?.write(data, 0, data.size) }
+                    runOnUiThread { emulator?.append(data, data.size) }
                 },
                 onExit = { code ->
                     runOnUiThread {
@@ -267,9 +268,12 @@ class TuiActivity : Activity() {
     /** 创建 Termux TerminalEmulator 并挂到 TerminalView（渲染引擎接管 SSH 输出）。 */
     private fun setupEmulator(handle: SshTunnel.ShellHandle) {
         val v = terminalView ?: return
+        // TerminalEmulator 的 TerminalOutput 是"回信通道"：emulator 处理终端请求
+        // （鼠标上报/模式查询等）时通过它写回 —— 桥接到 SSH shell。
         val output = object : TerminalOutput() {
             override fun write(data: ByteArray, offset: Int, count: Int) {
-                emulator?.write(data, offset, count)
+                val bytes = data.copyOfRange(offset, offset + count)
+                handle.write(bytes)
             }
             override fun titleChanged(oldTitle: String?, newTitle: String?) {}
             override fun onCopyTextToClipboard(text: String) {}
@@ -288,6 +292,7 @@ class TuiActivity : Activity() {
                 override fun onBell(session: TerminalSession) {}
                 override fun onColorsChanged(session: TerminalSession) {}
                 override fun onTerminalCursorStateChange(state: Boolean) {}
+                override fun getTerminalCursorStyle(): Int = 0
                 override fun logError(tag: String, message: String) {}
                 override fun logWarn(tag: String, message: String) {}
                 override fun logInfo(tag: String, message: String) {}
