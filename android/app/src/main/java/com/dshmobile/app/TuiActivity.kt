@@ -20,15 +20,15 @@ import com.termux.view.TerminalViewClient
 import org.json.JSONObject
 
 /**
- * dsh-mobile TUI 模式（远程 dsh-tui）。
+ * dsh-mobile SSH 终端模式（远程 shell；需要时手动输入 dsh-tui 等命令）。
  *
  * 架构（参考 Podroid 的 TerminalView 字段直赋法）：
  *  - SshTunnel.openShell() 建立 PTY shell 通道（JSch ChannelShell）
  *  - 官方 JitPack 版 TerminalSession 是 final 类且 updateSize 会启动本地
  *    子进程，因此**不调用它的 updateSize**；本类直接构造 TerminalEmulator，
  *    桥接 SSH 字节流：
- *      • 远端输出 → emulator.write() （Termux 渲染引擎解析 ANSI）
- *      • 软键盘/键排/音量键 → TerminalViewClient.onKeyDown 捕获 → shell.write()
+ *      • 远端输出 → emulator.append() （Termux 渲染引擎解析 ANSI）
+ *      • 软键盘/键排 → TerminalViewClient.onKeyDown 捕获 → shell.write()
  *  - TerminalView.mEmulator 为 public，直接赋值即可渲染（官方字段，
  *    非反射 hack；参考 Podroid TerminalScreen.kt 第 398/436 行同样做法）
  *
@@ -47,7 +47,6 @@ class TuiActivity : Activity() {
         const val COL_BG = 0xFF0A0A0E.toInt()
         const val COL_TEXT = 0xFFF5F5F7.toInt()
         const val COL_MUTED = 0x99FFFFFF.toInt()
-        const val DEFAULT_START_COMMAND = "dsh-tui"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -243,10 +242,8 @@ class TuiActivity : Activity() {
                         shell = h
                         setupEmulator(h)
                         statusView?.visibility = View.GONE
-                        // 自动启动 dsh-tui（可改 tui_command 定制）
-                        val cmd = prefs.getString("tui_command", DEFAULT_START_COMMAND)?.trim()
-                            ?.takeIf { it.isNotBlank() } ?: DEFAULT_START_COMMAND
-                        h.write("$cmd\r")
+                        // 纯 SSH 终端：进入后是普通远程 shell，不自动启动任何应用
+                        // （需要时在终端里手动输入 dsh-tui 即可）
                     }
                 },
                 onData = { data ->

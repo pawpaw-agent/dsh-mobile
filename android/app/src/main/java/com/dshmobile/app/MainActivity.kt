@@ -707,9 +707,9 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
         }, rowParams(top = dp(8)))
 
-        // TUI 模式：经 SSH 远程运行 dsh-tui（终端 UI，极客向）
+        // SSH 终端模式：经 SSH 打开远程 shell（终端 UI，终端内可运行 dsh-tui 等）
         card.addView(Button(this).apply {
-            text = "→ TUI 模式（远程 dsh-tui）"
+            text = "→ SSH 终端（远程 shell）"
             isAllCaps = false
             setTextColor(COL_TEXT)
             setBackgroundResource(R.drawable.bg_button_secondary)

@@ -42,7 +42,7 @@
 - **SSH 完成通知** — App 退后台时通过同一 SSH 隧道监听 Agent 完成事件，完成后推通知；回前台自动停止
 - **明文 HTTP 支持** — `usesCleartextTraffic="true"`，支持局域网直连、Tailscale、反向代理、SSH 本地转发
 - **dsh 0.1.2+ 浏览器认证适配** — 连接屏「访问令牌」栏 + 首次 token 换 cookie + 401 自动回退/提示，后台通知服务 `DshClient` 同样带 Cookie 认证
-- **TUI 模式（远程 dsh-tui）** — 经 SSH PTY 通道远程运行 [dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) 终端界面：基于 Termux 的 [terminal-view](https://github.com/termux/termux-app) 渲染（原生软键盘/IME 交互，非 WebView），底部常驻键排（ESC/TAB/CTRL/方向键 + dsh-tui 高频组合），启动自动拉起 `dsh-tui`（可用 `tui_command` 定制）
+- **SSH 终端模式** — 经 SSH PTY 通道打开**远程 shell**：基于 Termux 的 [terminal-view](https://github.com/termux/termux-app) 渲染（原生软键盘/IME 交互，非 WebView），底部常驻键排（ESC/TAB/CTRL/方向键/Enter）；进入后是普通远程 shell，**自由输入 dsh-tui 等命令**，不做任何自动启动
 
 > 后台通知服务（`AgentMonitorService`）内部仍使用轻量协议客户端 `DshClient` 监听 `host/session-status`，但 App 界面不包含任何原生业务页面。
 
@@ -97,7 +97,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 点 **Connect**，App 加载 dsh Web 前端，开始使用。
 
-也可以点连接屏底部的「**TUI 模式（远程 dsh-tui）**」进入终端界面（需先启用 SSH 隧道并填写主机/用户名/密码或私钥；服务端需预装 `dsh-tui`）。
+也可以点连接屏底部的「**SSH 终端（远程 shell）**」进入终端界面（需先启用 SSH 隧道并填写主机/用户名/密码或私钥；进入后是普通远程 shell，需要时手动输入 `dsh-tui` 等命令）。
 
 ---
 
@@ -178,4 +178,4 @@ dsh-mobile/
 
 **GPL-3.0**（[GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html)）
 
-本项目终端 UI（TUI 模式）基于 [Termux terminal-view / terminal-emulator](https://github.com/termux/termux-app)（GPL-3.0）集成，因此整个项目以 GPL-3.0 授权发布；您可以自由使用、修改、分发，但衍生作品必须同样以 GPL-3.0 开源。
+本项目 SSH 终端模式基于 [Termux terminal-view / terminal-emulator](https://github.com/termux/termux-app)（GPL-3.0）集成，因此整个项目以 GPL-3.0 授权发布；您可以自由使用、修改、分发，但衍生作品必须同样以 GPL-3.0 开源。
