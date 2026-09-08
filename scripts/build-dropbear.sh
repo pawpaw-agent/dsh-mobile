@@ -39,6 +39,10 @@ cd dropbear
     RANLIB="$toolchain/bin/llvm-ranlib" \
     STRIP="$toolchain/bin/llvm-strip"
 
+# Apply the Android-specific options (disables server password auth: crypt()
+# is unavailable on Android; keeps client DROPBEAR_PASSWORD env auth).
+cp ../localoptions.h .
+
 make PROGRAMS="$BUILD_ONLY"
 
 # Collect outputs.
