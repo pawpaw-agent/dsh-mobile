@@ -12,7 +12,6 @@ import android.widget.TextView
 import android.widget.ToggleButton
 import com.dshmobile.protocol.SshTunnel
 import com.termux.terminal.TerminalEmulator
-import com.termux.terminal.TerminalOutput
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
@@ -22,15 +21,14 @@ import org.json.JSONObject
 /**
  * dsh-mobile SSH 终端模式（远程 shell；需要时手动输入 dsh-tui 等命令）。
  *
- * 架构（参考 Podroid 的 TerminalView 字段直赋法）：
+ * 架构（Termux 官方标准路径 + SSH 字节流桥接）：
  *  - SshTunnel.openShell() 建立 PTY shell 通道（JSch ChannelShell）
- *  - 官方 JitPack 版 TerminalSession 是 final 类且 updateSize 会启动本地
- *    子进程，因此**不调用它的 updateSize**；本类直接构造 TerminalEmulator，
- *    桥接 SSH 字节流：
- *      • 远端输出 → emulator.append() （Termux 渲染引擎解析 ANSI）
- *      • 软键盘/键排 → TerminalViewClient.onKeyDown 捕获 → shell.write()
- *  - TerminalView.mEmulator 为 public，直接赋值即可渲染（官方字段，
- *    非反射 hack；参考 Podroid TerminalScreen.kt 第 398/436 行同样做法）
+ *  - TerminalSession 附带一个无害的本地休眠进程（sleep -c），正常初始化
+ *    TerminalEmulator（含 JNI pty），Termux 全部生命周期（updateSize/渲染/
+ *    滚动/光标）走原生实现；
+ *  - SSH 字节流绕过本地 pty：远端输出 → emulator.append()（Termux 渲染）；
+ *    软键盘/键排 → TerminalViewClient.onKeyDown 捕获 → shell.write()
+ *    （绝不写 session —— 那会写本地 pty 进程）。
  *
  * 许可：Termux terminal-view/emulator 为 GPL-3.0，本项目对应以 GPL-3.0 分发。
  */
@@ -74,12 +72,13 @@ class TuiActivity : Activity() {
         terminalView = TerminalView(this, null).apply {
             setTextSize(11)
             setTypeface(Typeface.MONOSPACE)
-            // Termux 终端组件的渲染字段：组件内部只在 updateSize()/attachSession()
-            // 里填充，我们在这里直接挂接（Podroid 同款做法）。
-            // mTermSession 需要一个非 null 实例供 TerminalViewClient 回调使用，
-            // 但绝不调用其 updateSize（那会 JNI.createSubprocess 启动本地进程）。
-            val idleSession = TerminalSession(
-                "/bin/sh", "/", arrayOf("-c", "true"), null, 5000,
+            // 官方标准路径：TerminalSession 附带一个无害的本地休眠进程，
+            // 正常初始化 TerminalEmulator（含 JNI pty），Termux 的所有生命周期
+            // （updateSize/渲染/滚动/光标）走原生实现。
+            // SSH 字节流绕过本地 pty：远端输出直接喂 session.getEmulator().append()，
+            // 键盘输入经 TerminalViewClient 桥到 SSH shell（绝不写 session——那会写本地 pty）。
+            val session = TerminalSession(
+                "/bin/sh", "/", arrayOf("-c", "sleep 100000"), null, 5000,
                 object : TerminalSessionClient {
                     override fun onTextChanged(changedSession: TerminalSession) {}
                     override fun onTitleChanged(changedSession: TerminalSession) {}
@@ -98,7 +97,8 @@ class TuiActivity : Activity() {
                     override fun logStackTraceWithMessage(tag: String, message: String, e: Exception) {}
                     override fun logStackTrace(tag: String, e: Exception) {}
                 })
-            mTermSession = idleSession
+            mTermSession = session
+            attachSession(session)
         }
         terminalView?.setTerminalViewClient(object : TerminalViewClient {
             override fun onScale(scale: Float): Float = 1f
@@ -262,44 +262,14 @@ class TuiActivity : Activity() {
         }.start()
     }
 
-    /** 创建 Termux TerminalEmulator 并挂到 TerminalView（渲染引擎接管 SSH 输出）。 */
+    /** SSH 就绪后挂接渲染：拿 session 的 emulator（Termux 原生初始化），SSH 输出直接 append。 */
     private fun setupEmulator(handle: SshTunnel.ShellHandle) {
         val v = terminalView ?: return
-        // TerminalEmulator 的 TerminalOutput 是"回信通道"：emulator 处理终端请求
-        // （鼠标上报/模式查询等）时通过它写回 —— 桥接到 SSH shell。
-        val output = object : TerminalOutput() {
-            override fun write(data: ByteArray, offset: Int, count: Int) {
-                val bytes = data.copyOfRange(offset, offset + count)
-                handle.write(bytes)
-            }
-            override fun titleChanged(oldTitle: String?, newTitle: String?) {}
-            override fun onCopyTextToClipboard(text: String) {}
-            override fun onPasteTextFromClipboard() {}
-            override fun onBell() {}
-            override fun onColorsChanged() {}
-        }
-        val emu = TerminalEmulator(
-            output, 80, 24, 5000,
-            object : TerminalSessionClient {
-                override fun onTextChanged(changedSession: TerminalSession) {}
-                override fun onTitleChanged(changedSession: TerminalSession) {}
-                override fun onSessionFinished(finishedSession: TerminalSession) {}
-                override fun onCopyTextToClipboard(session: TerminalSession, text: String) {}
-                override fun onPasteTextFromClipboard(session: TerminalSession?) {}
-                override fun onBell(session: TerminalSession) {}
-                override fun onColorsChanged(session: TerminalSession) {}
-                override fun onTerminalCursorStateChange(state: Boolean) {}
-                override fun getTerminalCursorStyle(): Int = 0
-                override fun logError(tag: String, message: String) {}
-                override fun logWarn(tag: String, message: String) {}
-                override fun logInfo(tag: String, message: String) {}
-                override fun logDebug(tag: String, message: String) {}
-                override fun logVerbose(tag: String, message: String) {}
-                override fun logStackTraceWithMessage(tag: String, message: String, e: Exception) {}
-                override fun logStackTrace(tag: String, e: Exception) {}
-            })
+        val session = v.mTermSession ?: return
+        val emu = session.getEmulator() ?: run { statusView?.text = "emulator 未初始化"; return }
         emulator = emu
-        v.mEmulator = emu
+        // TerminalSession 内部线程读本地 pty（sleep 进程，无输出），不影响；
+        // 真正的远端输出由 onData 直接 append 到这个 emulator。
         v.invalidate()
     }
 
