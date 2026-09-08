@@ -79,10 +79,14 @@ class TuiActivity : Activity() {
             // （/system/bin/sh -c 纯 shell 内置循环，不依赖 sleep 等外部命令），
             // 正常初始化 TerminalEmulator（含 JNI pty），Termux 的所有生命周期
             // （updateSize/渲染/滚动/光标）走原生实现。
+            // 注意：JNI createSubprocess 是 execvp(cmd, argv) 且 argv 直接来自
+            // args 数组 —— 因此 args 的第一个元素必须是程序名本身（argv[0]）。
             // SSH 字节流绕过本地 pty：远端输出直接喂 session.getEmulator().append()，
             // 键盘输入经 TerminalViewClient 桥到 SSH shell（绝不写 session——那会写本地 pty）。
             val session = TerminalSession(
-                "/system/bin/sh", "/", arrayOf("-c", "while true; do :; done"), null, 5000,
+                "/system/bin/sh", "/",
+                arrayOf("/system/bin/sh", "-c", "while true; do :; done"),
+                null, 5000,
                 object : TerminalSessionClient {
                     override fun onTextChanged(changedSession: TerminalSession) {}
                     override fun onTitleChanged(changedSession: TerminalSession) {}
