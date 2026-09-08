@@ -6,14 +6,39 @@ on:
     paths:
       - 'android/**'
       - '.github/workflows/ci.yml'
+      - 'scripts/**'
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 jobs:
+  build-dropbear:
+    name: Build dropbear dbclient (arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Android SDK (NDK)
+        uses: android-actions/setup-android@v3
+
+      - name: Locate NDK and build dbclient
+        run: |
+          ndk="$($ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+                 --list_installed | sed -E 's/( +[|] +)/|/g;s/ +$//' | \
+                 grep '^  ndk' | cut -d '|' -f 4 | sort | head -n1)"
+          echo "NDK: $ndk"
+          ANDROID_NDK_HOME="$ANDROID_HOME/$ndk" ./scripts/build-dropbear.sh
+
+      - name: Upload dbclient
+        uses: actions/upload-artifact@v4
+        with:
+          name: dropbear-arm64
+          path: build-dropbear-output
+
   build:
     name: Build debug APK
     runs-on: ubuntu-latest
+    needs: build-dropbear
 
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +56,19 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: "8.5"
+
+      - name: Fetch dropbear dbclient
+        uses: actions/download-artifact@v4
+        with:
+          name: dropbear-arm64
+          path: dbclient
+
+      - name: Stage dbclient into app jniLibs
+        run: |
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          install -m 0755 dbclient/dbclient android/app/src/main/jniLibs/arm64-v8a/libdbclient.so
+          cp dbclient/LICENSE.txt android/app/src/main/jniLibs/arm64-v8a/LICENSE-dropbear.txt 2>/dev/null || true
+          ls -la android/app/src/main/jniLibs/arm64-v8a/
 
       - name: Build debug APK
         run: |
