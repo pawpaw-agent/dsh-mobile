@@ -61,8 +61,9 @@ dsh --profile web
 
 > **dsh 0.1.2+ 浏览器认证（重要）**：0.1.2 起 dsh web 对页面和 `/api` 启用一次性 token 认证——首次访问必须用启动日志中 `?token=` 的 URL，服务端签发签名 cookie（默认 30 天，可配 `cookieMaxAgeDays` 调长），之后直连干净地址。**服务重启后 token 会变**（cookie 仍有效，只要签名密钥未变）。dsh-mobile 已适配：
 > - 连接屏新增「**访问令牌**」栏，粘贴 `?token=` 后的值；App 首次加载用它换 cookie，之后直连。
+> - **SSH 模式下 token 全自动**：App 连接时在服务端执行 `journalctl -u dsh-web.service` 自动提取最新 token 并保存——服务重启后无需手动更新（失败时回退到已存/手输 token）。
 > - SSH 隧道断线重连后本地端口会变（cookie 按 host:port 绑定而失效），App 会自动用 token 重新认证。
-> - 服务重启后 token 失效时，App 会提示「需要访问令牌」，回连接屏更新即可。
+> - 服务重启后 token 失效时，App 会提示「需要访问令牌」（仅局域网直连模式需手动从日志更新）。
 >
 > 获取最新 token（在服务端执行）：
 > ```sh

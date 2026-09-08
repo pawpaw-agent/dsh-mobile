@@ -404,6 +404,8 @@ class MainActivity : Activity() {
             }
             tunnel.start()
             val base = tunnel.localBaseUrl
+            // 自动获取最新 token（服务重启后旧 token 失效；失败静默回退）
+            autoFetchToken(tunnel)
             runOnUiThread {
                 if (base == null) {
                     tunnel.close()
@@ -759,6 +761,40 @@ class MainActivity : Activity() {
 
     // ── WebView 直连 ─────────────────────────────────────────
     /**
+     * 通过 SSH 自动获取 dsh web 的浏览器认证 token（服务端 journald 日志）。
+     *
+     * dsh 0.1.2+ 的 launch token 每次服务重启会变化，手动查日志很麻烦；
+     * SSH 模式下 App 直接代跑 journalctl 提取最新 token 并存入 prefs，
+     * 用户不再需要手输。失败（服务端无 journald/Unit 名不同等）时静默
+     * 返回 null，连接流程回退到已存/手输 token。
+     *
+     * 命令选择：优先 user unit；兜底全量 user journal（2 个候选，都会试）。
+     * 只认 `?token=` 后 base64url 字符（服务重启后旧 token 行仍在日志里，
+     * 取最后一行 = 当前进程的 token）。
+     */
+    private fun autoFetchToken(tunnel: SshTunnel): String? {
+        val commands = arrayOf(
+            // 候选 1：dsh-web service（systemd user unit，最常见部署）
+            "journalctl --user -u dsh-web.service -n 200 --no-pager 2>/dev/null " +
+                "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2",
+            // 候选 2：全量 user journal（Unit 名不同/非 systemd user unit 时兜底）
+            "journalctl --user -n 500 --no-pager 2>/dev/null " +
+                "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2",
+            // 候选 3：常见日志文件（手动 nohup 等部署）
+            "for f in ~/.dsh/web.log ~/.dsh/web_log ~/.dsh/dsh-web.log; do " +
+                "grep -oE 'token=[A-Za-z0-9_-]+' \"\$f\" 2>/dev/null; done | tail -1 | cut -d= -f2"
+        )
+        for (cmd in commands) {
+            val token = tunnel.execOnce(cmd)?.trim()
+            if (!token.isNullOrEmpty() && token.length >= 40) {
+                prefs.edit().putString(PREF_SERVER_TOKEN, token).apply()
+                return token
+            }
+        }
+        return null
+    }
+
+    /**
      * 加载 dsh web。DSH 0.1.2+ 的浏览器认证：
      *  - 有 token 且尚未种下 cookie：加载 `/?token=…`，服务端 303 → 换 `Set-Cookie`
      *    → 自动跳转干净 `/`（cookie 之后由 WebView 持久持有，无需再带 token）；
@@ -798,6 +834,8 @@ class MainActivity : Activity() {
             }
             tunnel.start()
             val base = tunnel.localBaseUrl
+            // 自动获取最新 token（服务重启后旧 token 失效；失败静默回退）
+            autoFetchToken(tunnel)
             runOnUiThread {
                 if (base == null) { tunnel.close(); status("隧道建立失败（检查 SSH 主机/端口/用户/认证）"); return@runOnUiThread }
                 persistSshConfig(sshHost, sshPort, sshUser, remotePort, auth)

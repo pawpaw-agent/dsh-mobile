@@ -210,6 +210,45 @@ class SshTunnel(
     }
 
     /**
+     * 在远端执行一条命令并收集 stdout（一次性，独立会话，跑完即断）。
+     *
+     * 用于自动获取 dsh web 的浏览器认证 token（SSH 场景下服务端有
+     * journald 日志，App 无需用户手输）。超时安全：命令超过 [timeoutMs]
+     * 未结束（或读到 EOF）即返回已收集内容；失败返回 null。
+     *
+     * @return 命令 stdout（已 trim）；失败/空输出返回 null
+     */
+    fun execOnce(cmd: String, timeoutMs: Long = 8_000): String? {
+        return try {
+            val jsch = JSch()
+            val s = buildSession(jsch)
+            s.connect(10_000)
+            try {
+                val channel = s.openChannel("exec") as com.jcraft.jsch.ChannelExec
+                channel.setCommand(cmd)
+                channel.connect(10_000)
+                val input = channel.inputStream
+                val out = java.io.ByteArrayOutputStream()
+                val buf = ByteArray(16 * 1024)
+                val deadline = System.currentTimeMillis() + timeoutMs
+                var closed = false
+                while (!closed && System.currentTimeMillis() < deadline) {
+                    val n = try { input.read(buf) } catch (_: Exception) { -1 }
+                    if (n < 0) { closed = true; break }
+                    if (n > 0) out.write(buf, 0, n)
+                    // EOF 提前退出；JSch 无阻塞 API，短 sleep 让出 CPU
+                    if (channel.isClosed) { closed = true; break }
+                    try { Thread.sleep(50) } catch (_: InterruptedException) { break }
+                }
+                try { channel.disconnect() } catch (_: Exception) {}
+                out.toString(Charsets.UTF_8.name()).trim().takeIf { it.isNotEmpty() }
+            } finally {
+                try { s.disconnect() } catch (_: Exception) {}
+            }
+        } catch (_: Exception) { null }
+    }
+
+    /**
      * shell 通道句柄：暴露写输入、改 PTY 尺寸、关闭通道等 TUI 需要的能力。
      * 关闭时同时释放其专享的 SSH 会话（不碰转发隧道）。
      */
