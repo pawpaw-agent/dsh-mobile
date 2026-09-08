@@ -51,4 +51,7 @@ dependencies {
     // JSch 比 sshj 更适合 Android：走 JCE 默认 provider（Conscrypt 有 EC/X25519），
     // 不依赖 Android 残缺 BouncyCastle，也不需要注册完整 BC。
     implementation("com.github.mwiede:jsch:0.2.21")
+    // Termux 终端组件（GPL-3.0，见项目 LICENSE）：TUI 模式的终端渲染 + 软键盘交互。
+    // terminal-view 依赖 terminal-emulator（含 NDK 原生渲染，x86/x86_64/arm 全部 ABI）。
+    implementation("com.github.termux:termux-app:terminal-view:0.118.1")
 }

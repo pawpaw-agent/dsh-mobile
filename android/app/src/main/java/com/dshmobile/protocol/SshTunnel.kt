@@ -98,22 +98,7 @@ class SshTunnel(
         onStateChange?.invoke("connecting")
         try {
             val jsch = JSch()
-            val s = when (auth) {
-                is Auth.Password -> {
-                    val sess = jsch.getSession(sshUser, sshHost, sshPort)
-                    sess.setPassword(auth.password)
-                    sess.setConfig(defaultConfig())
-                    sess
-                }
-                is Auth.KeyPair -> {
-                    val keyPath = auth.privateKeyFile.absolutePath
-                    if (auth.passphrase.isNullOrEmpty()) jsch.addIdentity(keyPath)
-                    else jsch.addIdentity(keyPath, auth.passphrase.toByteArray())
-                    val sess = jsch.getSession(sshUser, sshHost, sshPort)
-                    sess.setConfig(defaultConfig())
-                    sess
-                }
-            }
+            val s = buildSession(jsch)
             s.connect(10_000)
             // 0 = 让 JSch 自己分配空闲端口，避免手动占/释放端口导致的 Already bound
             val port = s.setPortForwardingL("127.0.0.1", 0, remoteHost, remotePort)
@@ -141,6 +126,115 @@ class SshTunnel(
         // 与桌面 ssh 的 first-use 行为对齐：首连接受未知主机公钥（TOFU）。
         put("StrictHostKeyChecking", "no")
         put("PreferredAuthentications", "password,publickey,keyboard-interactive")
+    }
+
+    /**
+     * 打开一个 PTY shell 通道（TUI 模式用）：独立于端口转发隧道的 SSH 会话，
+     * 建立后把远端 shell 的原始字节流通过 [onData] 桥接到终端渲染（如
+     * Termux TerminalView 的 TerminalEmulator）。
+     *
+     * 注意：本方法持有的 SSH 会话与 [start] 的隧道会话相互独立——
+     * [close] 只关闭转发隧道；shell 会话由调用方通过返回的 [ShellHandle] 管理。
+     *
+     * @param termType 远端 $TERM（默认 xterm-256color）
+     * @param rows/cols 初始 PTY 尺寸（Termux TerminalView 会在 resize 时更新）
+     * @param onReady 通道打开并完成 PTY 协商后回调（可在此处写启动命令）
+     * @param onData 远端输出（含回显、ANSI 序列）——须在 UI 线程消费
+     * @param onExit 通道关闭/异常（退出码或 -1）
+     */
+    fun openShell(
+        termType: String = "xterm-256color",
+        rows: Int = 24,
+        cols: Int = 80,
+        onReady: (ShellHandle) -> Unit,
+        onData: (ByteArray) -> Unit,
+        onExit: (Int) -> Unit,
+    ): ShellHandle? {
+        return try {
+            val jsch = JSch()
+            val s = buildSession(jsch)
+            s.connect(10_000)
+            val channel = s.openChannel("shell") as com.jcraft.jsch.ChannelShell
+            channel.setPtyType(termType)
+            channel.setPtySize(cols, rows, 0, 0)
+            // 先连接再启动输出泵，避免读到未连接通道的流而误报退出
+            channel.connect(10_000)
+            // 输出流逐块转发（Termux terminal-emulator 的 write() 消费）
+            val pump = Thread {
+                try {
+                    val input = channel.inputStream
+                    val buf = ByteArray(16384)
+                    while (!channel.isClosed && !channel.isEOF) {
+                        val n = try { input.read(buf) } catch (_: Exception) { -1 }
+                        if (n <= 0) break
+                        onData(buf.copyOf(n))
+                    }
+                } finally {
+                    onExit(channel.exitStatus)
+                }
+            }.apply { isDaemon = true; name = "dsh-shell-pump"; start() }
+            val handle = ShellHandle(channel, s, ::sendShellBytes)
+            onReady(handle)
+            handle
+        } catch (e: Exception) {
+            Log.w(TAG, "open shell failed: ${e.message}")
+            onExit(-1)
+            null
+        }
+    }
+
+    /** 向已打开的 shell 通道写原始字节（等价终端输入流）。 */
+    private fun sendShellBytes(channel: com.jcraft.jsch.ChannelShell, data: ByteArray) {
+        try { channel.outputStream.write(data); channel.outputStream.flush() } catch (_: Exception) {}
+    }
+
+    /** 根据认证方式构造（但不连接）JSch Session（与 connectOnce 一致的认证逻辑）。 */
+    private fun buildSession(jsch: JSch): com.jcraft.jsch.Session {
+        val s = when (auth) {
+            is Auth.Password -> {
+                val sess = jsch.getSession(sshUser, sshHost, sshPort)
+                sess.setPassword(auth.password)
+                sess.setConfig(defaultConfig())
+                sess
+            }
+            is Auth.KeyPair -> {
+                val keyPath = auth.privateKeyFile.absolutePath
+                if (auth.passphrase.isNullOrEmpty()) jsch.addIdentity(keyPath)
+                else jsch.addIdentity(keyPath, auth.passphrase.toByteArray())
+                val sess = jsch.getSession(sshUser, sshHost, sshPort)
+                sess.setConfig(defaultConfig())
+                sess
+            }
+        }
+        return s
+    }
+
+    /**
+     * shell 通道句柄：暴露写输入、改 PTY 尺寸、关闭通道等 TUI 需要的能力。
+     * 关闭时同时释放其专享的 SSH 会话（不碰转发隧道）。
+     */
+    class ShellHandle(
+        private val channel: com.jcraft.jsch.ChannelShell,
+        private val session: com.jcraft.jsch.Session,
+        private val writer: (com.jcraft.jsch.ChannelShell, ByteArray) -> Unit,
+    ) : Closeable {
+        /** 远端 shell 是否有输出可写（写前检查）。 */
+        val isOpen: Boolean get() = channel.isConnected && session.isConnected
+
+        /** 写入输入字节（软键盘/键排合成的事件序列）。 */
+        fun write(data: ByteArray) = writer(channel, data)
+
+        fun write(text: String) = writer(channel, text.toByteArray(Charsets.UTF_8))
+
+        /** 通知远端终端尺寸变化（TUI 界面随软键盘弹起/收起自适应）。 */
+        fun setSize(rows: Int, cols: Int) {
+            try { channel.setPtySize(cols, rows, 0, 0) } catch (_: Exception) {}
+        }
+
+        override fun close() {
+            try { channel.disconnect() } catch (_: Exception) {}
+            try { session.disconnect() } catch (_: Exception) {}
+        }
     }
 
 

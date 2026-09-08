@@ -705,6 +705,22 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
         }, rowParams(top = dp(8)))
 
+        // TUI 模式：经 SSH 远程运行 dsh-tui（终端 UI，极客向）
+        card.addView(Button(this).apply {
+            text = "→ TUI 模式（远程 dsh-tui）"
+            isAllCaps = false
+            setTextColor(COL_TEXT)
+            setBackgroundResource(R.drawable.bg_button_secondary)
+            setOnClickListener {
+                // 未配置 SSH 时提示先填 SSH 信息
+                if (prefs.getString("ssh_json", null) == null) {
+                    status("请先启用 SSH 隧道并填写主机/用户名")
+                    return@setOnClickListener
+                }
+                startActivity(Intent(this@MainActivity, TuiActivity::class.java))
+            }
+        }, rowParams(top = dp(10), height = dp(44), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
         return scroll
     }
 

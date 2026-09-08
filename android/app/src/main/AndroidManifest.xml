@@ -28,6 +28,14 @@
             </intent-filter>
         </activity>
 
+        <!-- TUI 模式（远程 dsh-tui）：软键盘需跟随终端渲染，adjustResize 保证键排不被遮挡 -->
+        <activity
+            android:name=".TuiActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
+            android:windowSoftInputMode="adjustResize" />
+
         <service
             android:name=".AgentMonitorService"
             android:exported="false"
