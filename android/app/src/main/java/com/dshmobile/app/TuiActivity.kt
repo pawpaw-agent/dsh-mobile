@@ -73,11 +73,17 @@ class TuiActivity : Activity() {
             )
         }
         terminalView = TerminalView(this, null).apply {
-            // 手机全屏终端字号：11/14 在 1080p 下都偏小。18sp 为舒适默认，
-            // 可从键排 A+/A- 调节（持久化到 prefs tui_font_size）。
-            val savedSize = getSharedPreferences("dsh-mobile", MODE_PRIVATE)
-                .getInt("tui_font_size", 18)
-            setTextSize(savedSize.coerceIn(12, 32))
+            // 重要：Termux TerminalView.setTextSize(int) 直接把数值传给
+            // Paint.setTextSize() —— 单位是 **px**（非 sp/dp，其 KDoc 的
+            // "density-independent pixels" 是误导）。18px 在 1080p/3 密度屏
+            // 上 ≈ 6dp，小到无法辨认。
+            // 因此按屏幕 density 换算：默认 15dp * density = px，
+            // 存 prefs 时也存 px（tui_font_size_px），A+/A- 每次 ±2dp。
+            val density = resources.displayMetrics.density
+            val defaultPx = (15 * density).toInt()
+            val savedPx = getSharedPreferences("dsh-mobile", MODE_PRIVATE)
+                .getInt("tui_font_size_px", defaultPx)
+            setTextSize(savedPx.coerceIn((12 * density).toInt(), (36 * density).toInt()))
             setTypeface(Typeface.MONOSPACE)
             // 官方标准路径：TerminalSession 附带一个无害的本地进程
             // （/system/bin/sh -c 纯 shell 内置循环，不依赖 sleep 等外部命令），
@@ -336,14 +342,18 @@ class TuiActivity : Activity() {
         return row
     }
 
-    /** 调整终端字号并持久化（范围 12–32）；变化后视图自动重排。 */
-    private fun adjustFont(delta: Int) {
+    /** 调整终端字号（±2dp，按 density 换算 px）并持久化；范围 12–36dp。 */
+    private fun adjustFont(deltaDp: Int) {
         val v = terminalView ?: return
+        val density = resources.displayMetrics.density
+        val defaultPx = (15 * density).toInt()
         val cur = getSharedPreferences("dsh-mobile", MODE_PRIVATE)
-            .getInt("tui_font_size", 18)
-        val next = (cur + delta).coerceIn(12, 32)
+            .getInt("tui_font_size_px", defaultPx)
+        val next = (cur + (deltaDp * density).toInt()).coerceIn(
+            (12 * density).toInt(), (36 * density).toInt()
+        )
         getSharedPreferences("dsh-mobile", MODE_PRIVATE)
-            .edit().putInt("tui_font_size", next).apply()
+            .edit().putInt("tui_font_size_px", next).apply()
         v.setTextSize(next)
     }
 
