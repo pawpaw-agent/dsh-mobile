@@ -124,7 +124,12 @@ class TuiActivity : Activity() {
         }
         terminalView?.setTerminalViewClient(object : TerminalViewClient {
             override fun onScale(scale: Float): Float = 1f
-            override fun onSingleTapUp(e: android.view.MotionEvent) {}
+            // 点击终端区域：请求焦点（Termux 同款 —— 焦点是软键盘弹出的前提），
+            // 并确保光标闪烁激活（幂等）
+            override fun onSingleTapUp(e: android.view.MotionEvent) {
+                terminalView?.requestFocus()
+                terminalView?.setTerminalCursorBlinkerState(true, true)
+            }
             override fun shouldBackButtonBeMappedToEscape(): Boolean = false
             override fun shouldEnforceCharBasedInput(): Boolean = false
             override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
@@ -322,6 +327,12 @@ class TuiActivity : Activity() {
                 Log.i(TAG, "emulator ready at attempt=$attempt; no buffered data")
             }
             v.invalidate()
+            // 光标闪烁（Termux 同款）：必须先设置 blink rate（默认 0 时
+            // setTerminalCursorBlinkerState(true,...) 会直接 return）；
+            // 之后启动闪烁 + 请求焦点（软键盘弹出的前提）。
+            v.setTerminalCursorBlinkerRate(500)
+            v.setTerminalCursorBlinkerState(true, true)
+            v.requestFocus()
             return
         }
         Log.i(TAG, "emulator not ready, attempt=$attempt/20")
