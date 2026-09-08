@@ -159,9 +159,26 @@ class TuiActivity : Activity() {
 
             // v0.118.1 接口方法（未使用则空实现）
             override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession): Boolean {
-                val handle = shell ?: return false
-                val bytes = String(Character.toChars(codePoint)).toByteArray(Charsets.UTF_8)
-                handle.write(bytes)
+                val handle = shell
+                if (handle == null) {
+                    Log.w(TAG, "onCodePoint: cp=$codePoint dropped (shell not ready)")
+                    return false
+                }
+                val ch = String(Character.toChars(codePoint))
+                if (ctrlDown) {
+                    // Ctrl+字母 → 控制字符（Termux 同款：a-z → 1-26）
+                    val c = codePoint
+                    val byte = when {
+                        c in 'a'.code..'z'.code -> (c - 'a'.code + 1)
+                        c in 'A'.code..'Z'.code -> (c - 'A'.code + 1)
+                        else -> return handle.write(ch.toByteArray(Charsets.UTF_8)).let { Log.v(TAG, "onCodePoint: cp=$codePoint ctrl plain"); true }
+                    }
+                    handle.write(byteArrayOf(byte.toByte()))
+                    Log.v(TAG, "onCodePoint: cp=$codePoint -> ctrl=${byte}")
+                    return true
+                }
+                handle.write(ch.toByteArray(Charsets.UTF_8))
+                Log.v(TAG, "onCodePoint: cp=$codePoint ('$ch') -> ssh")
                 return true
             }
             override fun onEmulatorSet() {}
