@@ -72,13 +72,14 @@ class TuiActivity : Activity() {
         terminalView = TerminalView(this, null).apply {
             setTextSize(11)
             setTypeface(Typeface.MONOSPACE)
-            // 官方标准路径：TerminalSession 附带一个无害的本地休眠进程，
-            // 正常初始化 TerminalEmulator（含 JNI pty），Termux 的所有生命周期
+            // 官方标准路径：TerminalSession 附带一个无害的本地进程
+            // （/system/bin/sh -c while 循环），正常初始化 TerminalEmulator
+            // （含 JNI pty），Termux 的所有生命周期
             // （updateSize/渲染/滚动/光标）走原生实现。
             // SSH 字节流绕过本地 pty：远端输出直接喂 session.getEmulator().append()，
             // 键盘输入经 TerminalViewClient 桥到 SSH shell（绝不写 session——那会写本地 pty）。
             val session = TerminalSession(
-                "/bin/sh", "/", arrayOf("-c", "sleep 100000"), null, 5000,
+                "/system/bin/sh", "/", arrayOf("-c", "while true; do sleep 60; done"), null, 5000,
                 object : TerminalSessionClient {
                     override fun onTextChanged(changedSession: TerminalSession) {}
                     override fun onTitleChanged(changedSession: TerminalSession) {}
