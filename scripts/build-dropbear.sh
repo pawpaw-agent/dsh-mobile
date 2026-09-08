@@ -47,8 +47,8 @@ cd dropbear
 
 # Apply the Android-specific options (disables server password auth: crypt()
 # is unavailable on Android; keeps client DROPBEAR_PASSWORD env auth).
-# Script already cd'd to its own dir, so localoptions.h is local.
-cp localoptions.h .
+# Explicit source path: CWD is dropbear/ here.
+cp "$SCRIPT_DIR/localoptions.h" .
 
 make PROGRAMS="$BUILD_ONLY"
 
