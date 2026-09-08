@@ -41,6 +41,7 @@
 - **WebView 加载进度条** — 页面加载时顶部显示一条纤细的白色进度条，不打断沉浸体验
 - **SSH 完成通知** — App 退后台时通过同一 SSH 隧道监听 Agent 完成事件，完成后推通知；回前台自动停止
 - **明文 HTTP 支持** — `usesCleartextTraffic="true"`，支持局域网直连、Tailscale、反向代理、SSH 本地转发
+- **dsh 0.1.2+ 浏览器认证适配** — 连接屏「访问令牌」栏 + 首次 token 换 cookie + 401 自动回退/提示，后台通知服务 `DshClient` 同样带 Cookie 认证
 
 > 后台通知服务（`AgentMonitorService`）内部仍使用轻量协议客户端 `DshClient` 监听 `host/session-status`，但 App 界面不包含任何原生业务页面。
 
@@ -53,7 +54,19 @@
 ```sh
 dsh --profile web
 # 默认监听 http://127.0.0.1:3080
+# dsh 0.1.2+ 启动时会打印带浏览器认证 token 的 URL，例如：
+#   dsh web: http://127.0.0.1:3080/?token=1EgfGY... (LAN: http://192.168.x.x:3080/?token=...)
 ```
+
+> **dsh 0.1.2+ 浏览器认证（重要）**：0.1.2 起 dsh web 对页面和 `/api` 启用一次性 token 认证——首次访问必须用启动日志中 `?token=` 的 URL，服务端签发签名 cookie（默认 30 天，可配 `cookieMaxAgeDays` 调长），之后直连干净地址。**服务重启后 token 会变**（cookie 仍有效，只要签名密钥未变）。dsh-mobile 已适配：
+> - 连接屏新增「**访问令牌**」栏，粘贴 `?token=` 后的值；App 首次加载用它换 cookie，之后直连。
+> - SSH 隧道断线重连后本地端口会变（cookie 按 host:port 绑定而失效），App 会自动用 token 重新认证。
+> - 服务重启后 token 失效时，App 会提示「需要访问令牌」，回连接屏更新即可。
+>
+> 获取最新 token（在服务端执行）：
+> ```sh
+> journalctl -u dsh-web.service -n 10 | grep "dsh web"
+> ```
 
 > 如果要让手机通过**局域网**访问，需要把服务绑到 `0.0.0.0`。`dsh web` 出于安全考虑**故意拒绝 `--host 0.0.0.0`**，请安装官方认可的 [dsh-lan-access](https://www.npmjs.com/package/dsh-lan-access) 插件：
 >
@@ -78,6 +91,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 打开 App，在连接屏选择协议（http / https），输入：
 - **Host** — 笔记本的局域网 IP（如 `192.168.1.100`）或 Tailscale IP（如 `100.x.x.x`）或隧道域名
 - **Port** — dsh web 端口，默认 `3080`
+- **访问令牌**（dsh 0.1.2+）— 启动日志 `?token=` 后的值（见上方说明）
 
 点 **Connect**，App 加载 dsh Web 前端，开始使用。
 
@@ -151,7 +165,7 @@ dsh-mobile/
 ## 注意事项
 
 - **网络调用**：全部在后台线程执行，UI 通过 `Handler(Looper.getMainLooper())` 回主线程刷新，避免阻塞主线程。
-- **安全**：绑定 `0.0.0.0` 后，同一内网任何设备都能访问 dsh web（无认证）。仅限家庭 / 公司可信内网使用，公共 WiFi 请勿开启；出外网请叠加 Tailscale 或 SSH 转发。
+- **安全**：dsh 0.1.2+ 默认启用一次性 token 认证（token 写在启动 URL，服务重启会更新），未登录设备无法访问；更早版本绑定 `0.0.0.0` 后同一内网任何设备都可访问（无认证）。仅限家庭 / 公司可信内网使用，公共 WiFi 请勿开启；出外网请叠加 Tailscale 或 SSH 转发。
 - **配置平面 403**：`settings.*` / `credentials.*` / `agentPreset` 写 / `host.pickDirectory` / `llm.discoverModels` 仅回环可访问，远程需 SSH 端口转发（见上文「远程访问限制」）。
 
 ---

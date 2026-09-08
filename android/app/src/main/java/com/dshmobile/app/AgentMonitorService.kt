@@ -86,18 +86,19 @@ class AgentMonitorService : Service() {
     private fun connect() {
         val prefs = prefs(this)
         val base = prefs.getString("url", null) ?: run { stopSelf(); return }
+        val launchToken = prefs.getString("server_token", "")?.trim().orEmpty()
         val rawSsh = prefs.getString("ssh_json", null)
         val needSsh = rawSsh != null &&
             (prefs.getBoolean("ssh_enabled", false) || base.startsWith("http://127.0.0.1:"))
         if (!needSsh) {
-            startMonitor(DshClient(base))
+            startMonitor(DshClient(base, launchToken))
             return
         }
         val cfg = rawSsh?.let { try { JSONObject(it) } catch (_: Exception) { null } }
         val host = cfg?.optString("sshHost") ?: ""
         val user = cfg?.optString("sshUser") ?: ""
         if (cfg == null || host.isBlank() || user.isBlank()) {
-            startMonitor(DshClient(base))
+            startMonitor(DshClient(base, launchToken))
             return
         }
         val tunnel = SshTunnel(
@@ -109,7 +110,7 @@ class AgentMonitorService : Service() {
             auth = if (cfg.optString("authType", "password") == "key") {
                 val keyPath = cfg.optString("keyPath", "")
                 if (keyPath.isBlank()) {
-                    startMonitor(DshClient(base))
+                    startMonitor(DshClient(base, launchToken))
                     return
                 }
                 SshTunnel.Auth.KeyPair(java.io.File(keyPath), cfg.optString("keyPass").ifEmpty { null })
@@ -125,7 +126,7 @@ class AgentMonitorService : Service() {
             }
             // 后台通知使用和主界面一致的 SSH 回环通道
             prefs.edit().putString("url", local).apply()
-            startMonitor(DshClient(local), tunnel)
+            startMonitor(DshClient(local, launchToken), tunnel)
         }.start()
     }
 

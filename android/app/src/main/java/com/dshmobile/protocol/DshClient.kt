@@ -24,17 +24,27 @@ import java.util.concurrent.atomic.AtomicInteger
  *    （每帧一个 server-request JSON，payload 为 MuxFrame / HostFrame）
  *  - 就绪握手：host.describe 成功 → connected；失败按指数退避重连。
  *
+ * DSH 0.1.2+ 浏览器认证（一次性 token 换签名 cookie，按 host:port 绑定）：
+ *  传入 [launchToken] 时，首次请求前自动 GET `/?token=...` 换取 `dsh-auth-*`
+ *  cookie，之后全部 HTTP / WebSocket 请求携带该 Cookie；收到 401 时自动
+ *  重新换一次。token 在服务端进程生命周期内有效（服务重启后需用户更新）。
+ *
  * 线程约定：[start] 必须在后台线程调用（内部同步发起 host.describe）；
  * 事件回调在 OkHttp 的 WS 线程触发，UI 侧需自行 post 到主线程。
  *
  * @param baseUrl 例如 http://127.0.0.1:3080 或 http://192.168.1.100:3080
+ * @param launchToken dsh web 启动日志打印的 `?token=` 值；DSH 0.1.2+ 必填（旧版可空）。
  */
-class DshClient(baseUrl: String) {
+class DshClient(baseUrl: String, launchToken: String? = null) {
+
+    /** 空串视同未配置（避免 `""` 被当作有效 token 发起空 token 请求）。 */
+    private val launchToken: String? = launchToken?.takeIf { it.isNotBlank() }
 
     private companion object {
         val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
         const val BACKOFF_BASE_MS = 500L
         const val BACKOFF_MAX_MS = 10_000L
+        const val COOKIE_NAME_PREFIX = "dsh-auth-"
     }
 
     private val base = baseUrl.toHttpUrl()
@@ -49,6 +59,48 @@ class DshClient(baseUrl: String) {
     private val backoff = AtomicInteger(0)
     private var muxWs: WebSocket? = null
     private var hostWs: WebSocket? = null
+
+    /** 已获取的浏览器会话 cookie（`dsh-auth-*` 全串）；null = 尚未认证/无 token。 */
+    @Volatile private var sessionCookie: String? = null
+
+    /** token 交换专用 client：不跟随 303（Set-Cookie 在中间响应上，必须原样读取）。 */
+    private val authHttp: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .followRedirects(false)
+        .build()
+
+    /**
+     * 用 launch token 交换浏览器会话 cookie（GET /?token=… → 303 + Set-Cookie）。
+     * 幂等：已有有效 cookie 时不再重复。失败返回 false（401/网络错误）。
+     * 线程安全（synchronized），须在后台线程调用。
+     */
+    @Synchronized
+    fun ensureAuthenticated(): Boolean {
+        val token = launchToken ?: return true
+        if (sessionCookie != null) return true
+        val url = base.newBuilder().addQueryParameter("token", token).build()
+        val request = Request.Builder().url(url).get().build()
+        return try {
+            authHttp.newCall(request).execute().use { resp ->
+                val setCookie = resp.header("set-cookie")
+                // 只认 dsh 的认证 cookie；忽略其它 set-cookie（代理/CDN 等）。
+                val ours = setCookie?.substringBefore(";")?.trim()
+                    ?.takeIf { it.startsWith(COOKIE_NAME_PREFIX) }
+                if (ours != null) {
+                    sessionCookie = ours
+                    true
+                } else {
+                    // 无 cookie：可能服务端未启用认证（旧版 dsh）或 token 失效。
+                    sessionCookie = null
+                    false
+                }
+            }
+        } catch (_: Exception) {
+            sessionCookie = null
+            false
+        }
+    }
 
     /** 状态机：connecting / connected / reconnecting */
     @Volatile var onStateChange: ((String) -> Unit)? = null
@@ -78,6 +130,8 @@ class DshClient(baseUrl: String) {
     fun start() {
         if (!running.compareAndSet(false, true)) return
         backoff.set(0)
+        // 先认证再开 WS：首个升级请求就带上 cookie，避免首轮 401 重开
+        if (launchToken != null) ensureAuthenticated()
         openEventSockets()
         handshakeLoop()
     }
@@ -93,14 +147,24 @@ class DshClient(baseUrl: String) {
 
     private fun openEventSockets() {
         muxWs?.cancel(); hostWs?.cancel()
-        muxWs = http.newWebSocket(Request.Builder().url(eventUrl("/api/events.mux")).build(), Downlink(true))
-        hostWs = http.newWebSocket(Request.Builder().url(eventUrl("/api/events.host")).build(), Downlink(false))
+        muxWs = http.newWebSocket(wsRequest("/api/events.mux"), Downlink(true))
+        hostWs = http.newWebSocket(wsRequest("/api/events.host"), Downlink(false))
+    }
+
+    /** 带认证 cookie 的 WebSocket 升级请求。 */
+    private fun wsRequest(path: String): Request {
+        val builder = Request.Builder().url(eventUrl(path))
+        sessionCookie?.let { builder.header("Cookie", it) }
+        return builder.build()
     }
 
     /** 同步就绪握手：成功 → connected；失败 → 退避后重开套接字再试，直到 stop()。 */
     private fun handshakeLoop() {
         while (running.get()) {
             onStateChange?.invoke("connecting")
+            // 每次重试前重新认证：服务重启或 SSH 换端口后 cookie 会失效，
+            // 而旧 cookie 可能导致后续握手/WS 持续 401。
+            if (launchToken != null) ensureAuthenticated()
             val desc = hostDescribe()
             if (!running.get()) return
             if (desc is Rpc.Result.Ok) {
@@ -135,9 +199,26 @@ class DshClient(baseUrl: String) {
         val rpcId = UUID.randomUUID().toString()
         val body = Rpc.clientRequest(rpcId, method, payload).toRequestBody(JSON_MEDIA)
         val url = base.newBuilder().encodedPath("/api/$method").build()
-        val request = Request.Builder().url(url).method("POST", body).build()
+        val builder = Request.Builder().url(url).method("POST", body)
+        sessionCookie?.let { builder.header("Cookie", it) }
         try {
-            http.newCall(request).execute().use { resp ->
+            http.newCall(builder.build()).execute().use { resp ->
+                // 401：认证失效（服务重启/换端口），用 token 重新换一次再试
+                if (resp.code == 401 && launchToken != null && ensureAuthenticated()) {
+                    val retry = Request.Builder().url(url).method("POST", body)
+                    sessionCookie?.let { retry.header("Cookie", it) }
+                    http.newCall(retry.build()).execute().use { r2 ->
+                        if (!r2.isSuccessful) {
+                            return Rpc.Result.Err(Rpc.Error("internal", "transport failure for $method: HTTP ${r2.code}"))
+                        }
+                        val t = r2.body?.string() ?: return Rpc.Result.Err(Rpc.Error("internal", "empty response body"))
+                        val full = Rpc.parseEnvelope(t)
+                        if (full.rpcId != rpcId) {
+                            return Rpc.Result.Err(Rpc.Error("internal", "rpcId mismatch for $method"))
+                        }
+                        return full.result ?: Rpc.Result.Err(Rpc.Error("internal", "missing result in server-response"))
+                    }
+                }
                 if (!resp.isSuccessful) {
                     return Rpc.Result.Err(Rpc.Error("internal", "transport failure for $method: HTTP ${resp.code}"))
                 }
@@ -192,9 +273,21 @@ class DshClient(baseUrl: String) {
             .put("result", JSONObject().put("ok", ok).put("value", value))
         val body = message.toString().toRequestBody(JSON_MEDIA)
         val url = base.newBuilder().encodedPath("/api/respond").build()
-        val request = Request.Builder().url(url).method("POST", body).build()
+        val builder = Request.Builder().url(url).method("POST", body)
+        sessionCookie?.let { builder.header("Cookie", it) }
         try {
-            http.newCall(request).execute().use { resp ->
+            http.newCall(builder.build()).execute().use { resp ->
+                if (resp.code == 401 && launchToken != null && ensureAuthenticated()) {
+                    val retry = Request.Builder().url(url).method("POST", body)
+                    sessionCookie?.let { retry.header("Cookie", it) }
+                    http.newCall(retry.build()).execute().use { r2 ->
+                        if (!r2.isSuccessful) {
+                            return Rpc.Result.Err(Rpc.Error("internal", "respond transport failure: HTTP ${r2.code}"))
+                        }
+                        val t = r2.body?.string() ?: return Rpc.Result.Err(Rpc.Error("internal", "empty respond body"))
+                        return Rpc.Result.Ok(JSONObject(t))
+                    }
+                }
                 if (!resp.isSuccessful) {
                     return Rpc.Result.Err(Rpc.Error("internal", "respond transport failure: HTTP ${resp.code}"))
                 }

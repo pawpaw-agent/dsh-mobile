@@ -62,6 +62,16 @@ class MainActivity : Activity() {
     private var pendingAuth: HttpAuthHandler? = null
     private var statusView: TextView? = null
     private var sshKeyPathInput: EditText? = null
+
+    /**
+     * 当前 URL 是否已成功完成过 token 交换（cookie 已种下）。
+     * cookie 按 host:port 绑定：SSH 重连换端口后必须置 false 重新认证。
+     * 直连模式端口不变，仅首次需要。
+     */
+    private var sshTokenAck = false
+
+    /** 401 时是否已尝试过回退干净 URL（防重复回退循环；每次 connectWeb 重置）。 */
+    private var unauthorizedCleanTried = false
     private lateinit var prefs: android.content.SharedPreferences
 
     private companion object {
@@ -85,6 +95,7 @@ class MainActivity : Activity() {
         const val PREF_SERVER_PROTO = "server_proto" // 用户填写的 dsh web 协议
         const val PREF_SERVER_HOST = "server_host"  // 用户填写的 dsh web 主机（非隧道本地随机端口）
         const val PREF_SERVER_PORT = "server_port"  // 用户填写的 dsh web 端口（远程/隧道目标端口）
+        const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后需更新）
 
         // dsh 前端 RPC 依赖 crypto.randomUUID；WebView 在局域网明文 HTTP
         //（非安全上下文）下访问不到该 API，会导致全部 RPC 失败（白屏）。
@@ -262,13 +273,23 @@ class MainActivity : Activity() {
             }
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
+                    // 带 ?token= 的成功页面：服务端已 303 换 cookie 并落地干净 URL；
+                    // 后续加载成功也记住认证态（cookie 有效期内无需重复 token 交换）。
+                    if (webView?.url?.contains("?token=") == false) sshTokenAck = true
                     hideErrorPage()
                 }
                 override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                     if (request?.isForMainFrame == true) showErrorPage(error?.description?.toString() ?: "网络错误")
                 }
                 override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, resp: android.webkit.WebResourceResponse?) {
-                    if (request?.isForMainFrame == true) showErrorPage("HTTP ${resp?.statusCode}")
+                    if (request?.isForMainFrame == true) {
+                        val code = resp?.statusCode ?: 0
+                        if (code == 401) {
+                            handleUnauthorized(view)
+                        } else {
+                            showErrorPage("HTTP $code")
+                        }
+                    }
                 }
                 override fun onReceivedHttpAuthRequest(view: WebView?, handler: HttpAuthHandler?, host: String?, realm: String?) {
                     handler ?: return
@@ -329,7 +350,9 @@ class MainActivity : Activity() {
             } else {
                 connectView?.visibility = View.GONE
                 lastUrl = savedUrl
-                webView?.loadUrl(savedUrl)
+                // 直连模式：端口不变时 token 只需换一次 cookie；已有 cookie 则免 token
+                sshTokenAck = false
+                connectWeb(savedUrl)
             }
         } else if (!currentUrl.isNullOrBlank()) {
             connectView?.visibility = View.GONE
@@ -374,7 +397,9 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     lastUrl = newBase
                     prefs.edit().putString("url", newBase).apply()
-                    webView?.loadUrl(newBase)
+                    // 重连换了本地端口：cookie 已失效，必须用 token 重新认证
+                    sshTokenAck = false
+                    connectWeb(newBase)
                 }
             }
             tunnel.start()
@@ -389,7 +414,8 @@ class MainActivity : Activity() {
                 prefs.edit().putString("url", base).apply()
                 connectView?.visibility = View.GONE
                 lastUrl = base
-                webView?.loadUrl(base)
+                sshTokenAck = false
+                connectWeb(base)
             }
         }.start()
     }
@@ -539,6 +565,12 @@ class MainActivity : Activity() {
         }
         card.addView(serverRow, rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
+        // dsh 0.1.2+ 一次性启动 token（浏览器认证）：首次加载 ?token= 换取
+        // cookie 后常驻；服务重启 token 变化，需要从 dsh web 启动日志更新。
+        val tokenInput = input("访问令牌（dsh 0.1.2+ 首次登录需要）", prefs.getString(PREF_SERVER_TOKEN, "").orEmpty())
+        tokenInput.setHorizontallyScrolling(true)
+        card.addView(tokenInput, rowParams(top = dp(8), height = dp(42), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
         // SSH 隧道
         val savedSsh = prefs.getString("ssh_json", null)?.let {
             try { JSONObject(it) } catch (_: Exception) { null }
@@ -633,6 +665,9 @@ class MainActivity : Activity() {
             setOnClickListener {
                 val useSsh = sshToggle.isChecked
                 prefs.edit().putBoolean(PREF_SSH_ENABLED, useSsh).apply()
+                prefs.edit().putString(PREF_SERVER_TOKEN, tokenInput.text.toString().trim()).apply()
+                // 手动重新连接 = 重新走一次认证（token 可能已更新）
+                sshTokenAck = false
 
                 val remotePort = portInput.text.toString().trim().ifEmpty { DEFAULT_PORT }.toIntOrNull() ?: 3080
                 if (useSsh) {
@@ -707,12 +742,24 @@ class MainActivity : Activity() {
     }
 
     // ── WebView 直连 ─────────────────────────────────────────
-    private fun connectWeb(url: String) {
+    /**
+     * 加载 dsh web。DSH 0.1.2+ 的浏览器认证：
+     *  - 有 token 且尚未种下 cookie：加载 `/?token=…`，服务端 303 → 换 `Set-Cookie`
+     *    → 自动跳转干净 `/`（cookie 之后由 WebView 持久持有，无需再带 token）；
+     *  - 已认证（上次成功加载过 / cookie 仍在）：直接加载干净 URL。
+     *
+     * 注意：SSH 隧道断线重连会换本地端口（cookie 按 host:port 绑定失效），
+     * 此时 [sshTokenAck] 为 false，会重新走 token 交换。
+     */
+    private fun connectWeb(url: String, forceToken: Boolean = false) {
         status("连接中… $url")
         connectView?.visibility = View.GONE
         lastUrl = url
+        unauthorizedCleanTried = false
         prefs.edit().putString("url", url).apply()
-        webView?.loadUrl(url)
+        val token = prefs.getString(PREF_SERVER_TOKEN, "")?.trim().orEmpty()
+        val needsToken = token.isNotEmpty() && (forceToken || !sshTokenAck)
+        webView?.loadUrl(if (needsToken) "$url/?token=$token" else url)
     }
 
     // ── SSH 隧道（纯 WebView 用）─────────────────────────────
@@ -727,7 +774,11 @@ class MainActivity : Activity() {
             )
             tunnel.onStateChange = { s -> runOnUiThread { status("隧道: $s") } }
             tunnel.onLocalBaseChanged = { newBase ->
-                runOnUiThread { connectWeb(newBase) }
+                runOnUiThread {
+                    // 重连换了本地端口：cookie 失效，必须用 token 重新认证
+                    sshTokenAck = false
+                    connectWeb(newBase)
+                }
             }
             tunnel.start()
             val base = tunnel.localBaseUrl
@@ -740,6 +791,7 @@ class MainActivity : Activity() {
                     .putString(PREF_SERVER_PORT, remotePort.toString())
                     .apply()
                 app.sshTunnel = tunnel
+                sshTokenAck = false
                 connectWeb(base)
             }
         }.start()
@@ -830,7 +882,7 @@ class MainActivity : Activity() {
                     isAllCaps = false
                     setTextColor(COL_ACCENT_TEXT)
                     setBackgroundResource(R.drawable.bg_button_primary)
-                    setOnClickListener { hideErrorPage(); lastUrl?.let { webView?.loadUrl(it) } }
+                    setOnClickListener { hideErrorPage(); lastUrl?.let { sshTokenAck = false; connectWeb(it) } }
                 }, rowParams(top = dp(24), height = dp(48), width = dp(200)))
                 addView(Button(this@MainActivity).apply {
                     text = "换服务器"
@@ -848,6 +900,73 @@ class MainActivity : Activity() {
     }
 
     private fun hideErrorPage() { errorView?.visibility = View.GONE }
+
+    /**
+     * 401 处理。分两段：
+     *  1. 若当前 URL 带 `?token=`（token 过期，但 cookie 可能仍有效——服务重启
+     *     后 token 更新、cookie 签名密钥持久化），先回退加载干净 URL；
+     *  2. 干净 URL 也 401（cookie 确实失效）→ 提示用户更新令牌。
+     *
+     * 幂等通过 [unauthorizedCleanTried] 标志防死循环（每次 connectWeb 重置）。
+     */
+    private fun handleUnauthorized(view: WebView?) {
+        val url = view?.url ?: lastUrl ?: return
+        if (!unauthorizedCleanTried && url.contains("?token=")) {
+            unauthorizedCleanTried = true
+            sshTokenAck = false
+            lastUrl?.let { view?.loadUrl(it.substringBefore("?")) }
+            return
+        }
+        showTokenPromptPage()
+    }
+
+    /**
+     * DSH 0.1.2+ 浏览器认证提示页：401 时说明需要一次性启动 token，
+     * 引导用户回到连接屏粘贴最新 token（服务重启后旧 token 失效）。
+     */
+    private fun showTokenPromptPage() {
+        if (errorView == null) {
+            errorView = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(COL_BG)
+                gravity = Gravity.CENTER
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                addView(TextView(this@MainActivity).apply {
+                    text = "需要访问令牌"
+                    textSize = 22f
+                    setTextColor(COL_TEXT)
+                    gravity = Gravity.CENTER
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = "dsh 0.1.2+ 需要一次性启动令牌。\n在服务端执行: journalctl -u dsh-web.service -n 10 | grep \"dsh web\"\n将 ?token= 后的值粘贴到连接屏「访问令牌」栏。"
+                    textSize = 14f
+                    setTextColor(COL_MUTED)
+                    gravity = Gravity.CENTER
+                }, rowParams(top = dp(8)))
+                addView(Button(this@MainActivity).apply {
+                    text = "去填写令牌"
+                    isAllCaps = false
+                    setTextColor(COL_ACCENT_TEXT)
+                    setBackgroundResource(R.drawable.bg_button_primary)
+                    setOnClickListener { hideErrorPage(); connectView?.visibility = View.VISIBLE }
+                }, rowParams(top = dp(24), height = dp(48), width = dp(200)))
+                addView(Button(this@MainActivity).apply {
+                    text = "重试"
+                    isAllCaps = false
+                    setTextColor(COL_TEXT)
+                    setBackgroundResource(R.drawable.bg_button_secondary)
+                    setOnClickListener {
+                        hideErrorPage()
+                        lastUrl?.let { sshTokenAck = false; connectWeb(it) }
+                    }
+                }, rowParams(top = dp(12), height = dp(48), width = dp(200)))
+            }
+            (webView?.parent as? ViewGroup)?.addView(errorView)
+        }
+        errorView?.visibility = View.VISIBLE
+    }
 
     // ── 生命周期 ──────────────────────────────────────────────
     override fun onResume() {
