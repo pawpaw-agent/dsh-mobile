@@ -135,7 +135,10 @@ class TuiActivity : Activity() {
                 showSoftKeyboard()
             }
             override fun shouldBackButtonBeMappedToEscape(): Boolean = false
-            override fun shouldEnforceCharBasedInput(): Boolean = false
+            // 强制字符级输入（Termux 默认 true）：三星等输入法对 TYPE_NULL 不发送
+            // commitText（termux-app issue #686 正是三星键盘）；true 时 onCreateInputConnection
+            // 用 TYPE_TEXT_VARIATION_VISIBLE_PASSWORD，键盘逐个字符提交、onCodePoint 逐个收到。
+            override fun shouldEnforceCharBasedInput(): Boolean = true
             override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
             override fun isTerminalViewSelected(): Boolean = true
             override fun copyModeChanged(copyMode: Boolean) {}
