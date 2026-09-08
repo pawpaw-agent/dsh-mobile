@@ -129,17 +129,10 @@ class TuiActivity : Activity() {
         }
         terminalView?.setTerminalViewClient(object : TerminalViewClient {
             override fun onScale(scale: Float): Float = 1f
-            // 点击终端区域：请求焦点 + 显式拉起软键盘（Termux 做法：
-            // requestFocus 只聚焦，键盘要 showSoftInput 才弹；且需 windowSoftInputMode
-            // 配合。500ms 延迟避免焦点/窗口未稳时 show 被忽略）。
+            // 点击终端区域：聚焦 + 弹软键盘（复用共享逻辑）
             override fun onSingleTapUp(e: android.view.MotionEvent) {
-                val tv = terminalView
-                tv?.requestFocus()
-                tv?.postDelayed({
-                    val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
-                            as android.view.inputmethod.InputMethodManager
-                    imm.showSoftInput(tv, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
-                }, 100)
+                terminalView?.requestFocus()
+                showSoftKeyboard()
             }
             override fun shouldBackButtonBeMappedToEscape(): Boolean = false
             override fun shouldEnforceCharBasedInput(): Boolean = false
@@ -344,6 +337,7 @@ class TuiActivity : Activity() {
             v.setTerminalCursorBlinkerRate(500)
             v.setTerminalCursorBlinkerState(true, true)
             v.requestFocus()
+            showSoftKeyboard()   // 进入 SSH 即自动弹出软键盘（Termux 无缝输入）
             return
         }
         Log.i(TAG, "emulator not ready, attempt=$attempt/20")
@@ -385,6 +379,20 @@ class TuiActivity : Activity() {
     }
 
     /** 调整终端字号（±2dp，按 density 换算 px）并持久化；范围 12–36dp。 */
+    /**
+     * 显式拉起软键盘。Termux 同款行为：requestFocus 只聚焦，必须
+     * showSoftInput 才弹；给 100ms 延迟避免窗口/焦点未稳时被系统忽略。
+     * 幂等（已显示时系统自行忽略）。
+     */
+    private fun showSoftKeyboard() {
+        val tv = terminalView ?: return
+        tv.postDelayed({
+            val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+                    as android.view.inputmethod.InputMethodManager
+            imm.showSoftInput(tv, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+        }, 100)
+    }
+
     private fun adjustFont(deltaDp: Int) {
         val v = terminalView ?: return
         val density = resources.displayMetrics.density
