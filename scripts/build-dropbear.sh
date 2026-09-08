@@ -7,13 +7,13 @@
 #
 # Usage:
 #   ANDROID_NDK_HOME=/path/to/ndk ./scripts/build-dropbear.sh
-#   [DROPBEAR_VERSION=2026.94] [BUILD_ONLY=dbclient]
+#   [DROPBEAR_VERSION=DROPBEAR_2026.94] [BUILD_ONLY=dbclient]
 #
 # Output: ./build-dropbear-output/{dbclient,LICENSE.txt}
 
 TARGET=${TARGET:-aarch64-linux-android}
 PLATFORM=21
-DROPBEAR_VERSION=${DROPBEAR_VERSION:-2026.94}
+DROPBEAR_VERSION=${DROPBEAR_VERSION:-DROPBEAR_2026.94}
 BUILD_ONLY=${BUILD_ONLY:-dbclient}
 OUTDIR=${OUTDIR:-build-dropbear-output}
 
