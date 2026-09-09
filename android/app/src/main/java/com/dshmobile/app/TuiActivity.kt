@@ -7,6 +7,7 @@ import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -91,8 +92,11 @@ class TuiActivity : Activity() {
         }
         terminalView?.setTerminalViewClient(object : TerminalViewClient {
             override fun onScale(scale: Float): Float = 1f
+            // 点击终端区域：聚焦 + 弹软键盘（Termux 同款；仅 requestFocus 不够，
+            // 必须显式 showSoftInput 才会弹出）
             override fun onSingleTapUp(e: android.view.MotionEvent) {
                 terminalView?.requestFocus()
+                showSoftKeyboard()
             }
             override fun shouldBackButtonBeMappedToEscape(): Boolean = false
             // 字符级输入（Termux 默认 true；三星/Gboard 兼容）
@@ -110,7 +114,8 @@ class TuiActivity : Activity() {
             override fun readFnKey(): Boolean = false
 
             override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession): Boolean = false
-            override fun onEmulatorSet() {}
+            // emulator 就绪（首次 attach / 尺寸变化）时启动光标闪烁
+            override fun onEmulatorSet() { startCursorBlinker() }
             override fun logError(tag: String, message: String) {}
             override fun logWarn(tag: String, message: String) {}
             override fun logInfo(tag: String, message: String) {}
@@ -164,15 +169,16 @@ class TuiActivity : Activity() {
         //  - key：-i 导入的私钥；缺私钥时尝试自动生成（dropbearkey）。
         val env: Array<String>?
         val keyArgs: Array<String>
+        val homeDir = filesDir.absolutePath   // dbclient 写 known_hosts/.ssh 用（避免落到 /data/.ssh 报权限）
         if (authType == "key") {
             val keyPath = resolveKeyPath() ?: run {
                 statusView?.text = "SSH 密钥不可用，请回连接屏导入私钥"
                 return
             }
-            env = null
+            env = arrayOf("HOME=$homeDir")
             keyArgs = arrayOf("-i", keyPath)
         } else {
-            env = arrayOf("DROPBEAR_PASSWORD=$password")
+            env = arrayOf("HOME=$homeDir", "DROPBEAR_PASSWORD=$password")
             keyArgs = arrayOf()
         }
 
@@ -213,6 +219,12 @@ class TuiActivity : Activity() {
         session = s
         terminalView?.attachSession(s)
         statusView?.visibility = View.GONE
+
+        // Termux 同款启动逻辑：聚焦终端 + 延迟拉起软键盘（等窗口/焦点稳定）。
+        // attachSession 后 TerminalView 会经 updateSize() 拿到实际尺寸并回调
+        // onEmulatorSet() → startCursorBlinker()（若已就绪届时即闪）。
+        terminalView?.requestFocus()
+        postDelayed({ terminalView?.requestFocus(); showSoftKeyboard() }, 300)
         Log.i(TAG, "dbclient started via TerminalSession")
     }
 
@@ -285,6 +297,10 @@ class TuiActivity : Activity() {
             isAllCaps = false
             setTextColor(COL_TEXT)
             setBackgroundColor(0x22000000)
+            // 不抢占焦点：点击键排时 TerminalView 保持焦点，软键盘不收起
+            // （Termux ExtraKeysView 同款行为）
+            isFocusable = false
+            isFocusableInTouchMode = false
             if (toggle) {
                 setOnClickListener { isChecked = !isChecked; onTap?.invoke(isChecked) }
             } else {
@@ -294,6 +310,51 @@ class TuiActivity : Activity() {
         val lp = LinearLayout.LayoutParams(0, 44, weight).apply { marginEnd = 3 }
         btn.layoutParams = lp
         return btn
+    }
+
+    /**
+     * 显式拉起软键盘（Termux KeyboardUtils.showSoftKeyboard 同款）。
+     * TerminalView 是 text editor（onCheckIsTextEditor()=true），但仅 requestFocus
+     * 不会强制弹出 —— 多数输入法（Gboard/三星）需要 showSoftInput 触发。
+     * 幂等：已显示时系统自行忽略；未聚焦时系统忽略（调用方需已 requestFocus）。
+     */
+    private fun showSoftKeyboard() {
+        val tv = terminalView ?: return
+        tv.postDelayed({
+            val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+                    as InputMethodManager
+            imm.showSoftInput(tv, InputMethodManager.SHOW_IMPLICIT)
+            Log.i(TAG, "showSoftInput requested (focus=${tv.hasFocus()})")
+        }, 120)
+    }
+
+    /**
+     * 启动光标闪烁。Termux 同款：TerminalView 默认 blink rate=0（禁用），
+     * 必须先 setTerminalCursorBlinkerRate() 再 setTerminalCursorBlinkerState(true,true)
+     * 才会开始闪；onEmulatorSet / onResume 各调一次（幂等）。
+     */
+    private fun startCursorBlinker() {
+        val tv = terminalView ?: return
+        if (tv.setTerminalCursorBlinkerRate(500))
+            tv.setTerminalCursorBlinkerState(true, true)
+        else
+            Log.w(TAG, "cursor blink rate rejected")
+    }
+
+    private fun stopCursorBlinker() {
+        terminalView?.setTerminalCursorBlinkerState(false, true)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        startCursorBlinker()
+        // 从后台回来（如切输入法设置）时恢复软键盘
+        postDelayed({ terminalView?.requestFocus(); showSoftKeyboard() }, 200)
+    }
+
+    override fun onPause() {
+        stopCursorBlinker()
+        super.onPause()
     }
 
     /** 调整终端字号（±2dp 换算 px）并持久化；范围 12–36dp。 */
