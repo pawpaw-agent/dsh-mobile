@@ -864,6 +864,14 @@ class MainActivity : Activity() {
         prefs.edit().putString("url", url).apply()
         val token = prefs.getString(PREF_SERVER_TOKEN, "")?.trim().orEmpty()
         val needsToken = token.isNotEmpty() && (forceToken || !sshTokenAck)
+        if (needsToken) {
+            // 431 修复（实测根因）：每次 token 交换 WebView 会追加一个 365 天有效的
+            // dsh-auth-* cookie（127.0.0.1 同 host），累计 69 个 ≈ 15.5KB 顶到
+            // 服务器 maxHeaderSize 16KB → HTTP 431 → 页面永远加载失败。
+            // 要重新认证时先清空 cookie jar（本 WebView 唯一用途就是这一页；
+            // 服务端会在 /?token= 交换后下发新 cookie）。
+            android.webkit.CookieManager.getInstance().removeAllCookies(null)
+        }
         webView?.loadUrl(if (needsToken) "$url/?token=$token" else url)
     }
 
