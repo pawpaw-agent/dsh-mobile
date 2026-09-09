@@ -488,12 +488,71 @@ class MainActivity : Activity() {
         })
         card.addView(headerRow, rowParams(top = dp(2), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // ── SSH 连接区（SSH Web + SSH 终端）────────────────────
-        // 直连模式已移除：所有入口（网页/终端/通知）统一经 SSH。
+        // ── 使用方法（SSH Web / SSH 终端）：页面主决策，主按钮跟随 ──
+        fun modeCard(text: String, sub: String): Pair<LinearLayout, (Boolean) -> Unit> {
+            val title = TextView(this@MainActivity).apply {
+                this.text = text
+                textSize = 14f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(COL_TEXT)
+                setIncludeFontPadding(false)
+                setSingleLine(true)
+            }
+            val desc = TextView(this@MainActivity).apply {
+                this.text = sub
+                textSize = 10f
+                setTextColor(COL_MUTED)
+                setIncludeFontPadding(false)
+                setSingleLine(true)
+            }
+            val card = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                isClickable = true
+                isFocusable = true
+                setPadding(dp(10), dp(12), dp(10), dp(10))
+                setBackgroundResource(R.drawable.bg_mode_card_off)
+                addView(title)
+                addView(desc, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(2) })
+            }
+            val paint = { on: Boolean ->
+                card.setBackgroundResource(if (on) R.drawable.bg_mode_card_on else R.drawable.bg_mode_card_off)
+                title.setTextColor(if (on) COL_ACCENT_TEXT else COL_TEXT)
+                desc.setTextColor(if (on) 0x88FFFFFF.toInt() else COL_MUTED)
+            }
+            return card to paint
+        }
+
+        val (webModeCard, paintWeb) = modeCard("SSH Web", "访问 dsh 网页界面")
+        val (termModeCard, paintTerm) = modeCard("SSH 终端", "远程 shell")
+        // 主按钮初始态：跟随默认模式（SSH Web）；后续模式切换由 selectMode 更新
+        var webMode = true
+        var connectMainBtn: Button? = null
+        fun selectMode(web: Boolean) {
+            webMode = web
+            paintWeb(web)
+            paintTerm(!web)
+            connectMainBtn?.text = if (web) "连接 · SSH Web" else "打开 · SSH 终端"
+        }
+        webModeCard.setOnClickListener { selectMode(true) }
+        termModeCard.setOnClickListener { selectMode(false) }
+        val modeRow = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(webModeCard, LinearLayout.LayoutParams(0, dp(64), 1f).apply { marginEnd = dp(6) })
+            addView(termModeCard, LinearLayout.LayoutParams(0, dp(64), 1f).apply { marginStart = dp(6) })
+        }
+        card.addView(modeRow, rowParams(top = dp(16), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        paintWeb(true); paintTerm(false)
+
+        val sshSection = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+
+        // ── SSH 连接参数（公共）──────────────────────────────
+        // 直连模式已移除：两种使用方法都经 SSH 隧道。
         val savedSsh = prefs.getString("ssh_json", null)?.let {
             try { JSONObject(it) } catch (_: Exception) { null }
         }
-        val sshSection = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
 
         sshSection.addView(label("SSH 主机"), rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
         val sshHostInput = input("主机", savedSsh?.optString("sshHost") ?: "")
@@ -591,12 +650,11 @@ class MainActivity : Activity() {
             setPadding(dp(14), dp(4), dp(14), dp(4))
             visibility = View.GONE
         }
-        card.addView(statusView, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // SSH Web：连接（自动获取令牌）
-        card.addView(Button(this@MainActivity).apply {
-            text = "连接 · SSH Web"
+        // SSH Web：连接（自动获取令牌）；SSH 终端：仅校验即打开 —— 主按钮跟随模式
+        connectMainBtn = Button(this@MainActivity).apply {
             isAllCaps = false
+            text = "连接 · SSH Web"
             setTextColor(COL_ACCENT_TEXT)
             setBackgroundResource(R.drawable.bg_button_primary)
             setOnClickListener {
@@ -619,42 +677,24 @@ class MainActivity : Activity() {
                     if (sshPassInput.text.toString().isEmpty()) { status("请填写 SSH 密码", true); return@setOnClickListener }
                     SshTunnel.Auth.Password(sshPassInput.text.toString())
                 }
+                if (!webMode) {
+                    // 终端模式：校验通过即持久化并直接打开（不要求 WebView 先连接成功）
+                    persistSshConfig(sh, sport, su, target, auth)
+                    startActivity(Intent(this@MainActivity, TuiActivity::class.java))
+                    return@setOnClickListener
+                }
                 if (!beginConnect()) return@setOnClickListener
                 connectViaSsh(sh, sport, su, target, auth)
             }
-        }, rowParams(top = dp(12), height = dp(46), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // 次操作行：SSH 终端 + 断开连接（断开仅在隧道运行时显示）
-        val secondaryRow = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
         }
-        secondaryRow.addView(Button(this@MainActivity).apply {
-            text = "SSH 终端（远程 shell）"
-            isAllCaps = false
-            textSize = 12f
-            setTextColor(COL_TEXT)
-            setBackgroundResource(R.drawable.bg_button_secondary)
-            setOnClickListener {
-                // 终端模式直接使用连接屏当前填写的字段（不要求 WebView 先连接成功）：
-                // 校验通过即持久化，TuiActivity 从 ssh_json 读取。
-                val sh = sshHostInput.text.toString().trim()
-                val su = sshUserInput.text.toString().trim()
-                val sport = sshPortInput.text.toString().trim().toIntOrNull()?.coerceIn(1, 65535) ?: 22
-                if (sh.isBlank() || su.isBlank()) { status("请先填写 SSH 主机/用户名", true); return@setOnClickListener }
-                val auth = if (authKeyBtn.isChecked) {
-                    val path = keyPathInput.text.toString().trim()
-                    if (path.isBlank()) { status("请选择 SSH 私钥", true); return@setOnClickListener }
-                    SshTunnel.Auth.KeyPair(File(path), keyPassInput.text.toString().ifEmpty { null })
-                } else {
-                    if (sshPassInput.text.toString().isEmpty()) { status("请填写 SSH 密码", true); return@setOnClickListener }
-                    SshTunnel.Auth.Password(sshPassInput.text.toString())
-                }
-                val target = sshTargetPortInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
-                    .toIntOrNull()?.coerceIn(1, 65535) ?: 3080
-                persistSshConfig(sh, sport, su, target, auth)
-                startActivity(Intent(this@MainActivity, TuiActivity::class.java))
-            }
-        }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) })
+        card.addView(connectMainBtn, rowParams(top = dp(12), height = dp(46), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // 状态行 + 断开连接（次级；断开仅在隧道运行时显示）
+        val statusRow = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        statusRow.addView(statusView, LinearLayout.LayoutParams(0, dp(28), 1f).apply { marginEnd = dp(6) })
         disconnectButton = Button(this@MainActivity).apply {
             text = "断开连接"
             isAllCaps = false
@@ -663,8 +703,8 @@ class MainActivity : Activity() {
             setBackgroundResource(R.drawable.bg_button_secondary)
             setOnClickListener { disconnectCurrent() }
         }
-        secondaryRow.addView(disconnectButton!!, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginStart = dp(6) })
-        card.addView(secondaryRow, rowParams(top = dp(10), height = dp(44), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        statusRow.addView(disconnectButton!!, LinearLayout.LayoutParams(dp(84), dp(28)))
+        card.addView(statusRow, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         // 上次连接摘要（单行）
         savedSsh?.takeIf { it.optString("sshHost").isNotBlank() }?.let {
