@@ -35,6 +35,7 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.dshmobile.protocol.SshTunnel
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
@@ -106,140 +107,44 @@ class MainActivity : Activity() {
         const val PREF_SSH_ENABLED = "ssh_enabled" // 是否经 SSH 隧道连接（唯一模式）
         const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后自动更新）
 
-        // dsh 前端 RPC 依赖 crypto.randomUUID；WebView 在局域网明文 HTTP
-        //（非安全上下文）下访问不到该 API，会导致全部 RPC 失败（白屏）。
-        // 标准 UUID v4 polyfill（幂等）：与 dsh-lan-access 插件的兜底一致。
-
-        // 移动端视口修正：让页面根节点、会话/侧边栏和底部输入严格贴合屏幕。
-        // 只允许消息列表内部滚动，底部统计/输入栏始终可见。
-        val MOBILE_VIEWPORT_CSS = """
+        // ── 移动端适配插件（dsh-web-mobile, MIT, github.com/mexiaosqwq/dsh-web-mobile）──
+        // 纯 App 侧注入，服务端零改动：doc-start 时用 setter 钩住 window.__DSH_BOOT__，
+        // 在服务端写入的启动图里补一条 dsh-web-mobile 插件项（entry + batch，URL 指向
+        // 我们自己的 agent 数据 URL）；WebView 引导循环按清单 create 该插件时，
+        // shouldInterceptRequest 命中该 URL 返回 APK assets 里的插件 bundle（283KB）。
+        // 插件运行时外部依赖仅 react/jsx-runtime + dsh-client-ui-primitives，
+        // 均已在前端壳的 staticModules 种子里（已验证），无需额外注入。
+        const val MOBILE_PLUGIN_ID = "dsh-web-mobile"
+        const val MOBILE_PLUGIN_REV = "dshmobile-2.4.0"
+        const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
+        private val MOBILE_PLUGIN_JS = """
             (function(){
               try {
-                var style = document.createElement('style');
-                style.textContent = `
-                  html, body, #root { height: 100vh !important; height: 100dvh !important; min-height: 100vh !important; min-height: 100dvh !important; max-height: 100vh !important; max-height: 100dvh !important; }
-                  html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !important; overflow-x: hidden !important; overflow-y: hidden !important; }
-                  /* 已全屏隐藏状态栏：去掉 dsh 移动端为“安全区”预留的顶部空白。
-                     重复属性选择器用于压过 dsh 后续插入的同 specificity 移动端规则。 */
-                  [data-mobile-nav="frame"][data-mobile-nav="frame"] { padding-top: 0 !important; }
-                  [data-mobile-nav="frame"][data-mobile-nav="frame"] > :first-child { padding-top: 0 !important; }
-                  [data-phase="active"][data-phase="active"] [data-slot="conversation.session.header"] > header { padding-top: 0 !important; }
-                  [data-slot="conversation"], [data-slot="sidebar"] { height: 100vh !important; height: 100dvh !important; max-height: 100vh !important; max-height: 100dvh !important; }
-                  [data-slot="conversation"] { overflow-y: auto !important; }
-                  [data-composer-card] { padding-bottom: max(8px, env(safe-area-inset-bottom)) !important; }
-                  [data-slot="conversation.input"] { padding-bottom: max(8px, env(safe-area-inset-bottom)) !important; }
-                  [data-mobile-nav="stats"][data-mobile-nav="stats"] {
-                    flex-wrap: wrap !important;
-                    height: auto !important;
-                    min-height: 0 !important;
-                    max-height: none !important;
-                    overflow: visible !important;
-                    overflow-x: hidden !important;
-                    overflow-y: visible !important;
-                    white-space: normal !important;
-                    row-gap: 2px !important;
-                    column-gap: 8px !important;
-                    padding-bottom: 0 !important;
-                  }
-                  [data-mobile-nav="stats"][data-mobile-nav="stats"] > span {
-                    font-size: 10px !important;
-                    line-height: 15px !important;
-                    margin: 0 6px 0 0 !important;
-                    white-space: nowrap !important;
-                  }
-                  [data-mobile-nav="stats"][data-mobile-nav="stats"] .FJxK0a_sep {
-                    margin: 0 4px !important;
-                  }
-                `;
-                (document.head || document.documentElement).appendChild(style);
-              } catch(e) {}
-            })();
-        """.trimIndent()
-
-
-        // 会话状态恢复：dsh SPA 重新加载后会落在 hero/首页，不会自动打开上次的会话。
-        // 这里在页面加载后：
-        //   1. 如果当前是会话页，保存会话标题与 sessionId；
-        //   2. 如果当前是首页，直接改写 dsh.sessions.current，
-        //      由 dsh 自己的 initial selection 自动打开上次会话（不模拟点击）。
-        val RESTORE_SESSION_JS = """
-            (function(){
-              try {
-                var KEY = 'dsh.mobile.lastSession';
-                var CURRENT = 'dsh.sessions.current';
-                function currentSessionId(){
-                  try {
-                    var raw = localStorage.getItem(CURRENT) || '';
-                    if (!raw) return '';
+                var stored;
+                Object.defineProperty(window, "__DSH_BOOT__", {
+                  configurable: true,
+                  get: function(){ return stored; },
+                  set: function(v){
                     try {
-                      var o = JSON.parse(raw);
-                      return (o && o.sessionId) ? o.sessionId : raw;
-                    } catch(e) { return raw; }
-                  } catch(e) { return ''; }
-                }
-                function currentTitle(){
-                  return (document.title || '').replace(/\s*—\s*DeepSeek Harness\s*$/, '').trim();
-                }
-                function hasConversation(){
-                  return !!document.querySelector('[data-mobile-nav="stats"]');
-                }
-                function parseSaved(){
-                  try {
-                    var v = localStorage.getItem(KEY);
-                    if (!v) return null;
-                    var o = JSON.parse(v);
-                    return (o && o.sessionId) ? o : null;
-                  } catch(e) { return null; }
-                }
-                function restore(){
-                  var saved = parseSaved();
-                  if (!saved) return 'no-saved';
-                  var current = currentSessionId();
-                  if (current === saved.sessionId) return 'already';
-                  // 直接改写 dsh 的当前会话持久化值。dsh 启动时的 initial selection
-                  // 会读取它并自动 open 对应会话，无需模拟点击或操作侧边栏。
-                  try { localStorage.setItem(CURRENT, JSON.stringify({sessionId: saved.sessionId})); } catch(e) {}
-                  return 'restore-set';
-                }
-                function saveCurrent(){
-                  var sid = currentSessionId();
-                  var title = currentTitle();
-                  if (sid && title && hasConversation()) {
-                    try { localStorage.setItem(KEY, JSON.stringify({sessionId:sid,title:title})); } catch(e) {}
+                      if (v && Array.isArray(v.entries) && Array.isArray(v.batches)) {
+                        v.entries.push({
+                          id: "$MOBILE_PLUGIN_ID",
+                          url: "$MOBILE_PLUGIN_URL",
+                          rev: "$MOBILE_PLUGIN_REV",
+                          inject: [],
+                          external: []
+                        });
+                        v.batches.push({
+                          phase: "application",
+                          url: "$MOBILE_PLUGIN_URL",
+                          rev: "$MOBILE_PLUGIN_REV",
+                          entries: ["$MOBILE_PLUGIN_ID"]
+                        });
+                      }
+                    } catch(e) {}
+                    stored = v;
                   }
-                }
-                function boot(){
-                  if (hasConversation()) {
-                    saveCurrent();
-                    return 'saved';
-                  }
-                  return restore();
-                }
-                if (document.readyState === 'loading') {
-                  document.addEventListener('DOMContentLoaded', boot);
-                } else {
-                  boot();
-                }
-                setInterval(saveCurrent, 2000);
-              } catch(e) { return 'err'; }
-            })();
-        """.trimIndent()
-
-        val CRYPTO_POLYFILL = """ // trimIndent 非编译期常量，故用 val
-            (function(){
-              try {
-                var C = window.Crypto;
-                if (C && !C.prototype.randomUUID) {
-                  C.prototype.randomUUID = function() {
-                    var b = crypto.getRandomValues(new Uint8Array(16));
-                    b[6] = (b[6] & 0x0f) | 0x40;
-                    b[8] = (b[8] & 0x3f) | 0x80;
-                    var h = [];
-                    for (var i = 0; i < 16; i++) h.push((b[i] + 256).toString(16).slice(1));
-                    return h.slice(0,4).join('') + '-' + h.slice(4,6).join('') + '-' +
-                           h.slice(6,8).join('') + '-' + h.slice(8,10).join('') + '-' + h.slice(10,16).join('');
-                  };
-                }
+                });
               } catch(e) {}
             })();
         """.trimIndent()
@@ -276,11 +181,25 @@ class MainActivity : Activity() {
                 useWideViewPort = true
             }
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                WebViewCompat.addDocumentStartJavaScript(this, CRYPTO_POLYFILL, setOf("*"))
-                WebViewCompat.addDocumentStartJavaScript(this, MOBILE_VIEWPORT_CSS, setOf("*"))
-                WebViewCompat.addDocumentStartJavaScript(this, RESTORE_SESSION_JS, setOf("*"))
+                WebViewCompat.addDocumentStartJavaScript(this, MOBILE_PLUGIN_JS, setOf("*"))
             }
             webViewClient = object : WebViewClient() {
+                // 拦截 dsh-web-mobile 插件 bundle：返回 APK assets 里的客户端脚本
+                override fun shouldInterceptRequest(
+                    view: WebView?,
+                    request: android.webkit.WebResourceRequest?
+                ): android.webkit.WebResourceResponse? {
+                    val u = request?.url?.toString() ?: return null
+                    // 兜底匹配：?? 可能被编码为 %3F%3F，只锚定 /plugins/ 前缀 + 插件 id
+                    if (!u.contains("/plugins/") || !u.contains("$MOBILE_PLUGIN_ID/client.js")) return null
+                    val bytes = try {
+                        assets.open("plugins/dsh-web-mobile-client.js").use { it.readBytes() }
+                    } catch (e: Exception) { return null }
+                    return android.webkit.WebResourceResponse(
+                        "text/javascript", "utf-8",
+                        null, ByteArrayInputStream(bytes)
+                    )
+                }
                 override fun onPageFinished(view: WebView?, url: String?) {
                     // 带 ?token= 的成功页面：服务端已 303 换 cookie 并落地干净 URL；
                     // 后续加载成功也记住认证态（cookie 有效期内无需重复 token 交换）。
