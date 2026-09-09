@@ -1095,7 +1095,8 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         webView?.onResume(); webView?.resumeTimers()
-        AgentMonitorService.stop(this) // 回前台：页面自己能看到，停掉监听服务
+        // 监听服务由 AgentMonitorService 经 ActivityLifecycleCallbacks 自停
+        //（外部 stopService 会与 startForegroundService 的 5s 窗口竞态 → 崩溃）
         refreshConnectState()
     }
 

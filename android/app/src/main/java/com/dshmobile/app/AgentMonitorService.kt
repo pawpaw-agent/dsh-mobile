@@ -1,5 +1,7 @@
 package com.dshmobile.app
 
+import android.app.Activity
+import android.app.Application
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,6 +11,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import com.dshmobile.protocol.DshClient
 import com.dshmobile.protocol.Models
 import com.dshmobile.protocol.Rpc
@@ -24,6 +27,13 @@ import org.json.JSONObject
  * 纯 WebView 版也使用：服务持有自己的轻量 [DshClient] 实例，
  * 只消费 host downlink。App 回前台即停服务，避免与页面重复耗电。
  *
+ * 停止竞态（实测 1.5.2 踩中 ForegroundServiceDidNotStartInTimeException）：
+ * 禁止外部 stopService —— startForegroundService 的 5s 窗口内（服务尚未执行
+ * startForeground）收到 stop 会被 AMS 直接炸进程。改为服务内部自停：
+ * [onCreate] 注册 ActivityLifecycleCallbacks，MainActivity 回前台时执行
+ * stopSelf()；它与 onStartCommand 同在主线程队列，必然排在
+ * startForeground 之后 —— 自停永不落入 pending-start 窗口。
+ *
  * 权限：POST_NOTIFICATIONS（Android 13+ 运行时申请）、FOREGROUND_SERVICE、
  * FOREGROUND_SERVICE_SPECIAL_USE（API 34+，manifest 声明）。
  */
@@ -32,42 +42,68 @@ class AgentMonitorService : Service() {
     private var client: DshClient? = null
     private var sshTunnel: SshTunnel? = null
     private val lastRunning = HashMap<String, Boolean>()
+    private var foregroundStarted = false
+    private val connectStarted = java.util.concurrent.atomic.AtomicBoolean(false)
 
     companion object {
+        private const val TAG = "AgentMonitorService"
         private const val CHANNEL_ID = "agent-done"
         private const val NOTIFICATION_TAG = "agent-done"
         private const val FGS_ID = 42
         private fun prefs(ctx: Context) = ctx.getSharedPreferences("dsh-mobile", Context.MODE_PRIVATE)
 
-        /** App 退后台时调用；回前台/退出时调用 [stop]。 */
+        /** App 退后台时调用；服务在 App 回前台时自停（见类注释）。 */
         fun start(ctx: Context) {
             val i = Intent(ctx, AgentMonitorService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i) else ctx.startService(i)
         }
-        fun stop(ctx: Context) { ctx.stopService(Intent(ctx, AgentMonitorService::class.java)) }
+    }
+
+    /**
+     * 自停回调：MainActivity 回前台 → stopSelf()。
+     * 与 onStartCommand 同线程队列 → 顺序保证 startForeground 先执行。
+     */
+    private val selfStopCallbacks = object : Application.ActivityLifecycleCallbacks {
+        override fun onActivityResumed(activity: Activity) {
+            if (activity is MainActivity) {
+                Log.i(TAG, "MainActivity resumed -> self-stop")
+                stopSelf()
+            }
+        }
+        override fun onActivityCreated(activity: Activity, savedInstanceState: android.os.Bundle?) {}
+        override fun onActivityStarted(activity: Activity) {}
+        override fun onActivityPaused(activity: Activity) {}
+        override fun onActivityStopped(activity: Activity) {}
+        override fun onActivitySaveInstanceState(activity: Activity, outState: android.os.Bundle) {}
+        override fun onActivityDestroyed(activity: Activity) {}
     }
 
     override fun onCreate() {
         super.onCreate()
         ensureNotificationChannel()
-        // startForeground 必须在 onStartCommand 中做（幂等）：Android 要求每次
-        // startForegroundService 后 5s 内必须 startForeground()。若服务实例
-        // 仍存活（上次 stopSelf 后销毁未完成），系统复用实例不会走 onCreate，
-        // 只回调 onStartCommand —— 这里修复由此导致的
-        // ForegroundServiceDidNotStartInTimeException（退后台即崩溃）。
+        // 尽早占用前台状态：5s 窗口从 startForegroundService 请求即开始，
+        // 主线程繁忙/实例复用等场景不能只依赖 onStartCommand 的时序
+        ensureForeground()
+        (application as DshApp).registerActivityLifecycleCallbacks(selfStopCallbacks)
+        Log.i(TAG, "onCreate (foreground=$foregroundStarted)")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!foregroundStarted) {
-            startForeground(FGS_ID, monitorNotification("DSH Mobile"))
-            foregroundStarted = true
-        }
+        ensureForeground()
         connect()
         return START_STICKY
     }
 
-    private var foregroundStarted = false
-    private val connectStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** startForeground 幂等保护：onCreate / onStartCommand 只允许成功一次。 */
+    private fun ensureForeground() {
+        if (foregroundStarted) return
+        try {
+            startForeground(FGS_ID, monitorNotification("DSH Mobile"))
+            foregroundStarted = true
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground failed", e)
+        }
+    }
 
     private fun openAppIntent(): PendingIntent {
         val i = Intent(this, MainActivity::class.java).apply {
@@ -187,10 +223,12 @@ class AgentMonitorService : Service() {
     }
 
     override fun onDestroy() {
+        (application as? DshApp)?.unregisterActivityLifecycleCallbacks(selfStopCallbacks)
         client?.stop()
         client = null
         try { sshTunnel?.close() } catch (_: Exception) {}
         sshTunnel = null
+        Log.i(TAG, "onDestroy")
         super.onDestroy()
     }
 
