@@ -71,6 +71,9 @@ class MainActivity : Activity() {
     /** 通知权限询问进行中（权限对话框本身会触发 onPause，防重入再弹）。 */
     private var notificationAskInFlight = false
 
+    /** 页面加载失败后的自动重试余量（WiFi 断连/隧道重建窗口期自动恢复，无需手动点重试）。 */
+    private var loadRetriesLeft = 0
+
     /**
      * 当前 URL 是否已成功完成过 token 交换（cookie 已种下）。
      * cookie 按 host:port 绑定：SSH 重连换端口后必须置 false 重新认证。
@@ -291,6 +294,7 @@ class MainActivity : Activity() {
                     // ERR_ABORTED(-3) = 导航被取消（重载/加载 about:blank 打断上一请求），不算失败
                     if (request?.isForMainFrame == true && error?.errorCode != -3) {
                         showErrorPage(error?.description?.toString() ?: "网络错误")
+                        scheduleLoadRetry()
                     }
                 }
                 override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, resp: android.webkit.WebResourceResponse?) {
@@ -300,6 +304,7 @@ class MainActivity : Activity() {
                             handleUnauthorized(view)
                         } else {
                             showErrorPage("HTTP $code")
+                            scheduleLoadRetry()
                         }
                     }
                 }
@@ -855,6 +860,7 @@ class MainActivity : Activity() {
         connectView?.visibility = View.GONE
         lastUrl = url
         unauthorizedCleanTried = false
+        loadRetriesLeft = 3
         prefs.edit().putString("url", url).apply()
         val token = prefs.getString(PREF_SERVER_TOKEN, "")?.trim().orEmpty()
         val needsToken = token.isNotEmpty() && (forceToken || !sshTokenAck)
@@ -1217,6 +1223,19 @@ class MainActivity : Activity() {
     private fun refreshConnectState() {
         disconnectButton?.visibility =
             if ((application as DshApp).sshTunnel != null) View.VISIBLE else View.GONE
+    }
+
+    /** 失败自动重试：5s 后重载（若隧道仍活；watchdog 会重建死隧道）。每次 connectWeb 重置 3 次余量。 */
+    private fun scheduleLoadRetry() {
+        if (loadRetriesLeft <= 0) return
+        loadRetriesLeft--
+        webView?.postDelayed({
+            if ((application as DshApp).sshTunnel != null && lastUrl != null) {
+                Log.i(TAG, "auto-retry page load (retriesLeft=$loadRetriesLeft) via $lastUrl")
+                sshTokenAck = false
+                connectWeb(lastUrl!!)
+            }
+        }, 5000)
     }
 
     private fun spacer(h: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, h) }
