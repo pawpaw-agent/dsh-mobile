@@ -224,7 +224,7 @@ class TuiActivity : Activity() {
         // attachSession 后 TerminalView 会经 updateSize() 拿到实际尺寸并回调
         // onEmulatorSet() → startCursorBlinker()（若已就绪届时即闪）。
         terminalView?.requestFocus()
-        postDelayed({ terminalView?.requestFocus(); showSoftKeyboard() }, 300)
+        terminalView?.postDelayed({ showSoftKeyboard() }, 300)
         Log.i(TAG, "dbclient started via TerminalSession")
     }
 
@@ -349,7 +349,10 @@ class TuiActivity : Activity() {
         super.onResume()
         startCursorBlinker()
         // 从后台回来（如切输入法设置）时恢复软键盘
-        postDelayed({ terminalView?.requestFocus(); showSoftKeyboard() }, 200)
+        terminalView?.postDelayed({
+            terminalView?.requestFocus()
+            showSoftKeyboard()
+        }, 200)
     }
 
     override fun onPause() {
