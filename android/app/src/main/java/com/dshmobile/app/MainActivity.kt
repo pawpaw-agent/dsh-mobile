@@ -196,8 +196,7 @@ class MainActivity : Activity() {
                         assets.open("plugins/dsh-web-mobile-client.js").use { it.readBytes() }
                     } catch (e: Exception) { return null }
                     return android.webkit.WebResourceResponse(
-                        "text/javascript", "utf-8",
-                        null, ByteArrayInputStream(bytes)
+                        "text/javascript", "utf-8", ByteArrayInputStream(bytes)
                     )
                 }
                 override fun onPageFinished(view: WebView?, url: String?) {
