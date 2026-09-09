@@ -7,3 +7,4 @@ local.properties
 
 # local APK downloads (CI artifacts)
 apk-dl/
+.rtree.json
