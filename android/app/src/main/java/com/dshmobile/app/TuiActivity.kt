@@ -235,7 +235,7 @@ class TuiActivity : Activity() {
             override fun onPasteTextFromClipboard(session: TerminalSession?) {
                 val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
                 val clip = cm.primaryClip ?: return
-                val paste = clip.getItemAt(0).coerceToText(this).toString()
+                val paste = clip.getItemAt(0).coerceToText(this@TuiActivity).toString()
                 if (paste.isNotEmpty()) session?.emulator?.paste(paste)
             }
             override fun onBell(session: TerminalSession) {}

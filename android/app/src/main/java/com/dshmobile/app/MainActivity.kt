@@ -292,8 +292,8 @@ class MainActivity : Activity() {
                     hideErrorPage()
                 }
                 override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                    // ERR_ABORTED = 导航被取消（重载/约谈/加载 about:blank 打断上一请求），不算失败
-                    if (request?.isForMainFrame == true && error?.errorCode != WebViewClient.ERROR_ABORTED) {
+                    // ERR_ABORTED(-3) = 导航被取消（重载/加载 about:blank 打断上一请求），不算失败
+                    if (request?.isForMainFrame == true && error?.errorCode != -3) {
                         showErrorPage(error?.description?.toString() ?: "网络错误")
                     }
                 }
