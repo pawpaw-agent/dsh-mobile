@@ -520,7 +520,7 @@ class MainActivity : Activity() {
             val paint = { on: Boolean ->
                 card.setBackgroundResource(if (on) R.drawable.bg_mode_card_on else R.drawable.bg_mode_card_off)
                 title.setTextColor(if (on) COL_ACCENT_TEXT else COL_TEXT)
-                desc.setTextColor(if (on) 0x88FFFFFF.toInt() else COL_MUTED)
+                desc.setTextColor(if (on) 0x55000000.toInt() else COL_MUTED)
             }
             return card to paint
         }
