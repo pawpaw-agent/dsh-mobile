@@ -100,11 +100,8 @@ class MainActivity : Activity() {
         const val DEFAULT_PORT = "3080"
         const val REQ_PICK_KEY = 2001
 
-        const val PREF_SSH_ENABLED = "ssh_enabled" // 上次是否通过 SSH 隧道连接
-        const val PREF_SERVER_PROTO = "server_proto" // 用户填写的 dsh web 协议
-        const val PREF_SERVER_HOST = "server_host"  // 用户填写的 dsh web 主机（非隧道本地随机端口）
-        const val PREF_SERVER_PORT = "server_port"  // 用户填写的 dsh web 端口（远程/隧道目标端口）
-        const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后需更新）
+        const val PREF_SSH_ENABLED = "ssh_enabled" // 是否经 SSH 隧道连接（唯一模式）
+        const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后自动更新）
 
         // dsh 前端 RPC 依赖 crypto.randomUUID；WebView 在局域网明文 HTTP
         //（非安全上下文）下访问不到该 API，会导致全部 RPC 失败（白屏）。
@@ -348,26 +345,20 @@ class MainActivity : Activity() {
         setContentView(root)
         applyImmersive()
 
-        // 自动连接（纯 WebView + SSH 优先）：上次带 SSH 的先恢复隧道，再加载本地回环 URL。
-        // 直连模式仍直接加载保存的 URL，避免每次启动重新输入。
+        // 自动连接（仅 SSH 模式）：存在完整 SSH 配置即恢复隧道 + 加载回环 URL；
+        // 否则停留在连接屏。直连模式已移除。
         val savedUrl = prefs.getString("url", null)
         val currentUrl = webView?.url
         val baseMatch = savedUrl != null && currentUrl != null &&
             currentUrl.trimEnd('/').startsWith(savedUrl.trimEnd('/'))
-        // 向后兼容：旧版本没有 ssh_enabled 标志，但保存的 URL 是隧道回环地址、
-        // 且存在完整 SSH 配置时也自动恢复隧道（否则会加载一个早已失效的旧端口）。
-        val savedIsSshLoopback = savedUrl?.startsWith("http://127.0.0.1:") == true
-        val sshSaved = prefs.getString("ssh_json", null) != null &&
-            (prefs.getBoolean(PREF_SSH_ENABLED, false) || savedIsSshLoopback)
+        val sshSaved = prefs.getString("ssh_json", null)?.let {
+            runCatching { JSONObject(it) }.getOrNull()
+        }?.takeIf { it.optString("sshHost").isNotBlank() && it.optString("sshUser").isNotBlank() }
         if (savedUrl != null && !baseMatch) {
-            if (sshSaved) {
+            if (sshSaved != null) {
                 autoConnectSsh(savedUrl)
             } else {
-                connectView?.visibility = View.GONE
-                lastUrl = savedUrl
-                // 直连模式：端口不变时 token 只需换一次 cookie；已有 cookie 则免 token
-                sshTokenAck = false
-                connectWeb(savedUrl)
+                connectView?.visibility = View.VISIBLE
             }
         } else if (!currentUrl.isNullOrBlank()) {
             connectView?.visibility = View.GONE
@@ -574,88 +565,8 @@ class MainActivity : Activity() {
         })
         card.addView(headerRow, rowParams(top = dp(2), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // ── 模式选择：直接连接 / SSH 隧道 ──────────────────────
-        val sshMode = prefs.getBoolean(PREF_SSH_ENABLED, false)
-        val directBtn = segment("直接连接", !sshMode)
-        val sshBtn = segment("SSH 隧道", sshMode)
-        val modeGroup = RadioGroup(this@MainActivity).apply {
-            orientation = RadioGroup.HORIZONTAL
-            addView(directBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
-            addView(sshBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(6) })
-        }
-        card.addView(modeGroup, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // ── 直连区 ────────────────────────────────────────────
-        // 协议分段：优先使用独立保存的服务器信息，避免被 SSH 随机本地端口覆盖
-        val savedUrl = prefs.getString("url", null)
-        val savedSshForServer = prefs.getString("ssh_json", null)?.let {
-            try { JSONObject(it) } catch (_: Exception) { null }
-        }
-        var prefillProto = prefs.getString(PREF_SERVER_PROTO, "http") ?: "http"
-        var prefillHost = prefs.getString(PREF_SERVER_HOST, "") ?: ""
-        var prefillPort = prefs.getString(PREF_SERVER_PORT, DEFAULT_PORT) ?: DEFAULT_PORT
-        if (prefillHost.isBlank()) {
-            // 老版本/首次升级：从旧的完整 URL 反向解析
-            savedUrl?.let {
-                Regex("^(https?)://([^:]+)(?::(\\d+))?$").find(it.trim())?.let { m ->
-                    prefillProto = m.groupValues[1]; prefillHost = m.groupValues[2]
-                    if (m.groupValues[3].isNotEmpty()) prefillPort = m.groupValues[3]
-                }
-            }
-            // 如果是 SSH 留下的 127.0.0.1:随机端口，就换成稳定的隧道目标端口
-            if (prefillHost == "127.0.0.1") {
-                prefillHost = savedSshForServer?.optString("remoteHost") ?: prefillHost
-                prefillPort = (savedSshForServer?.optInt("remotePort", DEFAULT_PORT.toInt()) ?: DEFAULT_PORT.toInt()).toString()
-            }
-        }
-
-        val directSection = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
-        directSection.addView(label("网页地址"), rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        val httpBtn = segment("http", prefillProto != "https")
-        val httpsBtn = segment("https", prefillProto == "https")
-        val protocolGroup = RadioGroup(this@MainActivity).apply {
-            orientation = RadioGroup.HORIZONTAL
-            addView(httpBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(6) })
-            addView(httpsBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginStart = dp(6) })
-        }
-        directSection.addView(protocolGroup, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        val hostInput = EditText(this@MainActivity).apply {
-            hint = "IP / 域名"
-            textSize = 14f
-            setText(prefillHost)
-            setTextColor(COL_TEXT); setHintTextColor(COL_HINT)
-            setBackgroundResource(R.drawable.bg_input)
-            setPadding(dp(12), dp(11), dp(12), dp(11)); setSingleLine(true)
-            setHorizontallyScrolling(true)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        }
-        val portInput = EditText(this@MainActivity).apply {
-            hint = "端口"; textSize = 14f; setText(prefillPort)
-            setTextColor(COL_TEXT); setHintTextColor(COL_HINT)
-            setBackgroundResource(R.drawable.bg_input)
-            setPadding(dp(12), dp(11), dp(12), dp(11)); setSingleLine(true)
-            setHorizontallyScrolling(true)
-            inputType = InputType.TYPE_CLASS_NUMBER
-        }
-        val serverRow = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(hostInput, LinearLayout.LayoutParams(0, dp(42), 3f).apply { marginEnd = dp(8) })
-            addView(portInput, LinearLayout.LayoutParams(0, dp(42), 1f))
-        }
-        directSection.addView(serverRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        directSection.addView(label("访问令牌"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        val tokenInput = input("令牌（dsh 0.1.2+ 浏览器认证）", prefs.getString(PREF_SERVER_TOKEN, "").orEmpty())
-        directSection.addView(tokenInput, rowParams(top = dp(6), height = dp(42), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        directSection.addView(TextView(this@MainActivity).apply {
-            text = "服务重启后令牌会变化；直连需服务端开放该端口。"
-            textSize = 10f
-            setTextColor(COL_DIM)
-        }, rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        card.addView(directSection, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // ── SSH 区 ────────────────────────────────────────────
+        // ── SSH 连接区（SSH Web + SSH 终端）────────────────────
+        // 直连模式已移除：所有入口（网页/终端/通知）统一经 SSH。
         val savedSsh = prefs.getString("ssh_json", null)?.let {
             try { JSONObject(it) } catch (_: Exception) { null }
         }
@@ -727,7 +638,7 @@ class MainActivity : Activity() {
         sshSection.addView(keyPassRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         sshSection.addView(TextView(this@MainActivity).apply {
-            text = "令牌：SSH 模式下由应用自动从服务端日志获取，无需手填。"
+            text = "令牌：由应用自动从服务端日志获取，无需手填。"
             textSize = 10f
             setTextColor(COL_DIM)
         }, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
@@ -744,17 +655,7 @@ class MainActivity : Activity() {
             passRow.visibility = if (key) View.GONE else View.VISIBLE
         }
         authGroup.setOnCheckedChangeListener { _, _ -> syncAuthFields() }
-
-        // 模式切换：只显示当前模式的分区（直连区/SSH 区互斥）
-        fun syncMode() {
-            val ssh = sshBtn.isChecked
-            directSection.visibility = if (ssh) View.GONE else View.VISIBLE
-            sshSection.visibility = if (ssh) View.VISIBLE else View.GONE
-            if (ssh) syncAuthFields()
-        }
-        modeGroup.setOnCheckedChangeListener { _, _ -> syncMode() }
         syncAuthFields()
-        syncMode()
 
         card.addView(spacer(dp(10)))
 
@@ -769,53 +670,34 @@ class MainActivity : Activity() {
         }
         card.addView(statusView, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
+        // SSH Web：连接（自动获取令牌）
         card.addView(Button(this@MainActivity).apply {
-            text = "连接"
+            text = "连接 · SSH Web"
             isAllCaps = false
             setTextColor(COL_ACCENT_TEXT)
             setBackgroundResource(R.drawable.bg_button_primary)
             setOnClickListener {
-                val useSsh = sshBtn.isChecked
-                prefs.edit().putBoolean(PREF_SSH_ENABLED, useSsh).apply()
+                prefs.edit().putBoolean(PREF_SSH_ENABLED, true).apply()
                 // 手动重新连接 = 重新走一次认证（token 可能已更新）
                 sshTokenAck = false
 
                 // 先完成全部校验，再进入连接守卫（校验失败不阻塞后续状态）
-                if (useSsh) {
-                    val sh = sshHostInput.text.toString().trim()
-                    val su = sshUserInput.text.toString().trim()
-                    val sport = sshPortInput.text.toString().trim().toIntOrNull()?.coerceIn(1, 65535) ?: 22
-                    val target = sshTargetPortInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
-                        .toIntOrNull()?.coerceIn(1, 65535) ?: 3080
-                    if (sh.isBlank() || su.isBlank()) { status("SSH 主机/用户名不能为空", true); return@setOnClickListener }
-                    val auth = if (authKeyBtn.isChecked) {
-                        val path = keyPathInput.text.toString().trim()
-                        if (path.isBlank()) { status("请选择 SSH 私钥", true); return@setOnClickListener }
-                        SshTunnel.Auth.KeyPair(File(path), keyPassInput.text.toString().ifEmpty { null })
-                    } else {
-                        if (sshPassInput.text.toString().isEmpty()) { status("请填写 SSH 密码", true); return@setOnClickListener }
-                        SshTunnel.Auth.Password(sshPassInput.text.toString())
-                    }
-                    if (!beginConnect()) return@setOnClickListener
-                    connectViaSsh(sh, sport, su, target, auth)
+                val sh = sshHostInput.text.toString().trim()
+                val su = sshUserInput.text.toString().trim()
+                val sport = sshPortInput.text.toString().trim().toIntOrNull()?.coerceIn(1, 65535) ?: 22
+                val target = sshTargetPortInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
+                    .toIntOrNull()?.coerceIn(1, 65535) ?: 3080
+                if (sh.isBlank() || su.isBlank()) { status("SSH 主机/用户名不能为空", true); return@setOnClickListener }
+                val auth = if (authKeyBtn.isChecked) {
+                    val path = keyPathInput.text.toString().trim()
+                    if (path.isBlank()) { status("请选择 SSH 私钥", true); return@setOnClickListener }
+                    SshTunnel.Auth.KeyPair(File(path), keyPassInput.text.toString().ifEmpty { null })
                 } else {
-                    val host = hostInput.text.toString().trim()
-                    if (host.isBlank()) { status("网页地址不能为空", true); return@setOnClickListener }
-                    val proto = if (protocolGroup.checkedRadioButtonId == httpsBtn.id) "https" else "http"
-                    val port = portInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
-                        .toIntOrNull()?.coerceIn(1, 65535) ?: DEFAULT_PORT.toInt()
-                    prefs.edit()
-                        .putString(PREF_SERVER_TOKEN, tokenInput.text.toString().trim())
-                        .putString(PREF_SERVER_PROTO, proto)
-                        .putString(PREF_SERVER_HOST, host)
-                        .putString(PREF_SERVER_PORT, port.toString())
-                        .apply()
-                    if (!beginConnect()) return@setOnClickListener
-                    // 直连模式不需要隧道：关掉 SSH 遗留隧道（模式切换防泄漏）
-                    closeCurrentTunnel()
-                    connectWeb("$proto://$host:$port")
-                    endConnect()
+                    if (sshPassInput.text.toString().isEmpty()) { status("请填写 SSH 密码", true); return@setOnClickListener }
+                    SshTunnel.Auth.Password(sshPassInput.text.toString())
                 }
+                if (!beginConnect()) return@setOnClickListener
+                connectViaSsh(sh, sport, su, target, auth)
             }
         }, rowParams(top = dp(12), height = dp(46), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
@@ -861,19 +743,11 @@ class MainActivity : Activity() {
         secondaryRow.addView(disconnectButton!!, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginStart = dp(6) })
         card.addView(secondaryRow, rowParams(top = dp(10), height = dp(44), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // 上次连接摘要（按当前模式显示，信息量 1 行）
-        val lastUsed = if (sshMode) {
-            val c = savedSshForServer
-            if (c != null && c.optString("sshHost").isNotBlank())
-                "${c.optString("sshUser")}@${c.optString("sshHost")}:${c.optInt("sshPort", 22)}" +
-                    " → ${c.optString("remoteHost", "127.0.0.1")}:${c.optInt("remotePort", 3080)}"
-            else null
-        } else {
-            if (prefillHost.isNotBlank() && prefillHost != "127.0.0.1") "$prefillProto://$prefillHost:$prefillPort" else null
-        }
-        lastUsed?.let {
+        // 上次连接摘要（单行）
+        savedSsh?.takeIf { it.optString("sshHost").isNotBlank() }?.let {
             card.addView(TextView(this@MainActivity).apply {
-                text = "上次连接: $it"
+                text = "上次连接: ${it.optString("sshUser")}@${it.optString("sshHost")}:${it.optInt("sshPort", 22)}" +
+                    " → ${it.optString("remoteHost", "127.0.0.1")}:${it.optInt("remotePort", 3080)}"
                 textSize = 10f
                 setTextColor(COL_DIM)
                 gravity = Gravity.CENTER
@@ -1022,11 +896,6 @@ class MainActivity : Activity() {
             autoFetchToken(tunnel)
             runOnUiThread {
                 persistSshConfig(sshHost, sshPort, sshUser, remotePort, auth)
-                prefs.edit()
-                    .putString(PREF_SERVER_PROTO, "http")
-                    .putString(PREF_SERVER_HOST, "127.0.0.1")
-                    .putString(PREF_SERVER_PORT, remotePort.toString())
-                    .apply()
                 app.sshTunnel = tunnel
                 sshTokenAck = false
                 connectWeb(base)
@@ -1160,8 +1029,8 @@ class MainActivity : Activity() {
     }
 
     /**
-     * DSH 0.1.2+ 浏览器认证提示页：401 时说明需要一次性启动 token，
-     * 引导用户回到连接屏粘贴最新 token（服务重启后旧 token 失效）。
+     * DSH 0.1.2+ 浏览器认证提示页：401 时说明需要一次性启动 token。
+     * 令牌由应用自动从服务端日志获取——提供「自动获取并重连」一键处理。
      */
     private fun showTokenPromptPage() {
         if (errorView == null) {
@@ -1179,17 +1048,17 @@ class MainActivity : Activity() {
                     gravity = Gravity.CENTER
                 })
                 addView(TextView(this@MainActivity).apply {
-                    text = "dsh 0.1.2+ 需要一次性启动令牌。\n在服务端执行: journalctl -u dsh-web.service -n 10 | grep \"dsh web\"\n将 ?token= 后的值粘贴到连接屏「访问令牌」栏。"
+                    text = "dsh 0.1.2+ 需要一次性启动令牌（服务重启后旧令牌失效）。\n应用会自动从服务端日志重新获取；\n若仍失败，请检查服务端 dsh-web.service 是否在运行。"
                     textSize = 14f
                     setTextColor(COL_MUTED)
                     gravity = Gravity.CENTER
                 }, rowParams(top = dp(8)))
                 addView(Button(this@MainActivity).apply {
-                    text = "去填写令牌"
+                    text = "自动获取令牌并重连"
                     isAllCaps = false
                     setTextColor(COL_ACCENT_TEXT)
                     setBackgroundResource(R.drawable.bg_button_primary)
-                    setOnClickListener { hideErrorPage(); connectView?.visibility = View.VISIBLE; refreshConnectState() }
+                    setOnClickListener { reFetchTokenAndReload() }
                 }, rowParams(top = dp(24), height = dp(48), width = dp(200)))
                 addView(Button(this@MainActivity).apply {
                     text = "重试"
@@ -1205,6 +1074,30 @@ class MainActivity : Activity() {
             (webView?.parent as? ViewGroup)?.addView(errorView)
         }
         errorView?.visibility = View.VISIBLE
+    }
+
+    /** 401 令牌页：用当前隧道重新自动获取令牌并重载（失败则回到提示页）。 */
+    private fun reFetchTokenAndReload() {
+        val tunnel = (application as DshApp).sshTunnel
+        if (tunnel == null) {
+            status("尚无 SSH 隧道，请先连接", true)
+            hideErrorPage(); connectView?.visibility = View.VISIBLE; refreshConnectState()
+            return
+        }
+        hideErrorPage()
+        status("自动获取令牌…")
+        Thread {
+            val token = autoFetchToken(tunnel)
+            runOnUiThread {
+                if (token == null || token.length < 40) {
+                    status("自动获取令牌失败，请检查服务端 dsh-web.service", true)
+                    showTokenPromptPage()
+                } else {
+                    sshTokenAck = false
+                    lastUrl?.let { connectWeb(it) }
+                }
+            }
+        }.start()
     }
 
     // ── 生命周期 ──────────────────────────────────────────────
