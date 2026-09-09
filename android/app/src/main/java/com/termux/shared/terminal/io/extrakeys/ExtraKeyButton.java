@@ -30,6 +30,9 @@ public class ExtraKeyButton {
     /** The key name for the nested dict to define popup extra key info if using a dict to define the extra key. {popup: {key: name, ...}, ...} */
     public static final String KEY_POPUP = "popup";
 
+    /** The key name for the number of rows this button should span if using a dict. {rowSpan: 2, ...} Defaults to 1. (dsh-mobile extension) */
+    public static final String KEY_ROW_SPAN = "rowSpan";
+
 
     /**
      * The key that will be sent to the terminal, either a control character, like defined in
@@ -52,6 +55,11 @@ public class ExtraKeyButton {
      */
     @Nullable
     private final ExtraKeyButton popup;
+
+    /**
+     * The number of rows this button spans in the extra keys grid. Defaults to 1.
+     */
+    private final int rowSpan;
 
 
     /**
@@ -115,6 +123,7 @@ public class ExtraKeyButton {
         }
 
         this.popup = popup;
+        this.rowSpan = config.optInt(KEY_ROW_SPAN, 1);
     }
 
     public String getStringFromJson(@NonNull JSONObject config, @NonNull String key) {
@@ -144,6 +153,11 @@ public class ExtraKeyButton {
     @Nullable
     public ExtraKeyButton getPopup() {
         return popup;
+    }
+
+    /** Get {@link #rowSpan}. */
+    public int getRowSpan() {
+        return rowSpan;
     }
 
     /**

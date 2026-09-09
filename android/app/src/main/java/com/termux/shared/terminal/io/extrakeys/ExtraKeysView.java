@@ -461,7 +461,9 @@ public final class ExtraKeysView extends GridLayout {
                 param.height = 0;
                 param.setMargins(0, 0, 0, 0);
                 param.columnSpec = GridLayout.spec(col, GridLayout.FILL, 1.f);
-                param.rowSpec = GridLayout.spec(row, GridLayout.FILL, 1.f);
+                // dsh-mobile: rowSpan > 1 merges the cell vertically (e.g. KEYBOARD)
+                int rowSpan = Math.max(1, Math.min(buttonInfo.getRowSpan(), buttons.length));
+                param.rowSpec = GridLayout.spec(row, rowSpan, GridLayout.FILL, 1.f);
                 button.setLayoutParams(param);
 
                 addView(button);

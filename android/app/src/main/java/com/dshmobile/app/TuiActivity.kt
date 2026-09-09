@@ -57,14 +57,14 @@ class TuiActivity : Activity() {
         const val KEY_NAME = "id_dropbear"
 
         /**
-         * Termux 默认 extra-keys 布局（等价于 termux.properties 缺省值），
-         * 7+7 官方排布 + 键排内 KEYBOARD 键（收/呼软键盘，DshTerminalExtraKeys 拦截）。
-         * 符号→显示名映射与别名由 ExtraKeysInfo(style="default") 处理
-         * （←→↑↓、↹、⌫、⎋、⎈、⎇ 等与 Termux 完全一致）。
+         * extra-keys 布局 —— Termux 官方 7+7（style="default" 文字风格），
+         * 仅 KEYBOARD（⌨ 收/呼软键盘）跨两行：{key:"KEYBOARD", rowSpan:2}，
+         * 其余按键每个一格。ExtraKeysView 支持 rowSpan 单元格合并。
          */
         const val EXTRA_KEYS_LAYOUT =
-            """[["ESC","/",{"key":"-","popup":"|"},"HOME","UP","END","PGUP"],
-               ["TAB","CTRL","ALT","LEFT","DOWN","RIGHT","PGDN","KEYBOARD"]]"""
+            """[["ESC","/",{"key":"-","popup":"|"},"HOME","UP","END","PGUP",
+               {"key":"KEYBOARD","rowSpan":2}],
+               ["TAB","CTRL","ALT","LEFT","DOWN","RIGHT","PGDN"]]"""
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
