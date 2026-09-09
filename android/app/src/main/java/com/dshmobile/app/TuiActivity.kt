@@ -58,13 +58,13 @@ class TuiActivity : Activity() {
 
         /**
          * Termux 默认 extra-keys 布局（等价于 termux.properties 缺省值），
-         * 每行 7 键保持官方排布，KEYBOARD/A+/A- 并入第二行尾部。
+         * 7+7 官方排布 + 键排内 KEYBOARD 键（收/呼软键盘，DshTerminalExtraKeys 拦截）。
          * 符号→显示名映射与别名由 ExtraKeysInfo(style="default") 处理
          * （←→↑↓、↹、⌫、⎋、⎈、⎇ 等与 Termux 完全一致）。
          */
         const val EXTRA_KEYS_LAYOUT =
             """[["ESC","/",{"key":"-","popup":"|"},"HOME","UP","END","PGUP"],
-               ["TAB","CTRL","ALT","LEFT","DOWN","RIGHT","PGDN","KEYBOARD","A+","A-"]]"""
+               ["TAB","CTRL","ALT","LEFT","DOWN","RIGHT","PGDN","KEYBOARD"]]"""
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -285,21 +285,17 @@ class TuiActivity : Activity() {
     /**
      * 底部常驻快捷键栏 —— Termux 官方 ExtraKeysView（原样移植）：
      *  - 布局 = Termux 默认 extra-keys（ESC / - | 方向键 HOME END PGUP 等）
-     *    + KEYBOARD + A+/A-（我们的本地功能键）
+     *    + KEYBOARD（收/呼软键盘）
      *  - 长按方向键自动重复、向上滑弹出 popup、CTRL/ALT 长按锁定 —— 全部 Termux
      *    原生行为（ExtraKeysView 自带）
-     *  - 客户端 DshTerminalExtraKeys：拦截 KEYBOARD/A+/A-，其余走 Termux 派发器
+     *  - 客户端 DshTerminalExtraKeys：拦截 KEYBOARD，其余走 Termux 派发器
      */
     private fun buildExtraKeys(): View {
         val extras = ExtraKeysView(this, null).apply {
             setButtonColors(COL_TEXT, COL_TEXT_ACTIVE, 0x1AFFFFFF, 0xFF4A4A55.toInt())
             setButtonTextAllCaps(false)
             setExtraKeysViewClient(
-                DshTerminalExtraKeys(
-                    terminalView!!,
-                    onToggleKeyboard = { toggleSoftKeyboard() },
-                    onAdjustFont = { adjustFont(it) }
-                )
+                DshTerminalExtraKeys(terminalView!!, onToggleKeyboard = { toggleSoftKeyboard() })
             )
             try {
                 reload(ExtraKeysInfo(EXTRA_KEYS_LAYOUT, "default", ExtraKeysConstants.CONTROL_CHARS_ALIASES))
@@ -326,17 +322,17 @@ class TuiActivity : Activity() {
     private fun readModifier(button: SpecialButton): Boolean =
         extraKeysView?.readSpecialButton(button, true) == true
 
-    /** KEYBOARD 键：软键盘收/呼切换（Termux 同款行为）。 */
+    /** ⌨ 键：收/呼软键盘（Termux KeyboardUtils.toggleSoftKeyboard 同款）。
+     * 用 IMM.toggleSoftInput(SHOW_FORCED, 0)：系统自判当前状态并切换，
+     * 无需读取 isAcceptingText（焦点在 TerminalView 时恒为 true，会误判）。 */
     private fun toggleSoftKeyboard() {
         val tv = terminalView ?: return
-        val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
-                as InputMethodManager
-        if (imm.isAcceptingText) {
-            imm.hideSoftInputFromWindow(tv.windowToken, 0)
-        } else {
-            tv.requestFocus()
-            showSoftKeyboard()
-        }
+        tv.requestFocus()
+        tv.postDelayed({
+            val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+                    as InputMethodManager
+            imm.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0)
+        }, 60)
     }
 
     /**
@@ -385,21 +381,6 @@ class TuiActivity : Activity() {
     override fun onPause() {
         stopCursorBlinker()
         super.onPause()
-    }
-
-    /** 调整终端字号（±2dp 换算 px）并持久化；范围 12–36dp。 */
-    private fun adjustFont(deltaDp: Int) {
-        val v = terminalView ?: return
-        val density = resources.displayMetrics.density
-        val defaultPx = (15 * density).toInt()
-        val cur = getSharedPreferences("dsh-mobile", MODE_PRIVATE)
-            .getInt("tui_font_size_px", defaultPx)
-        val next = (cur + (deltaDp * density).toInt()).coerceIn(
-            (12 * density).toInt(), (36 * density).toInt()
-        )
-        getSharedPreferences("dsh-mobile", MODE_PRIVATE)
-            .edit().putInt("tui_font_size_px", next).apply()
-        v.setTextSize(next)
     }
 
     override fun onDestroy() {
