@@ -778,14 +778,20 @@ class MainActivity : Activity() {
         // SSH 非交互会话通常没有 XDG_RUNTIME_DIR，而 journalctl --user 依赖它
         // 定位用户会话的 systemd 实例 —— 显式导出（UID 1000 为主流桌面/服务器用户）。
         val xdg = "export XDG_RUNTIME_DIR=/run/user/$(id -u 2>/dev/null || echo 1000); "
+        // 实测教训（树莓派）：部分宿主 user journal 不在（journalctl --user 报
+        // No journal files），但 system journal 可按 _SYSTEMD_USER_UNIT 过滤。
+        // 候选顺序：user-unit → system-unit 过滤 → 全量 user → 全量 system → 日志文件。
         val commands = arrayOf(
-            // 候选 1：dsh-web service（systemd user unit，最常见部署）
+            // 候选 1：system journal 按用户单元过滤（user journal 缺失时仍可用）
+            "$xdg journalctl _SYSTEMD_USER_UNIT=dsh-web.service -n 200 --no-pager 2>/dev/null " +
+                "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2",
+            // 候选 2：dsh-web service（systemd user unit，常见部署）
             "$xdg journalctl --user -u dsh-web.service -n 200 --no-pager 2>/dev/null " +
                 "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2",
-            // 候选 2：全量 user journal（Unit 名不同/非 systemd user unit 时兜底）
-            "$xdg journalctl --user -n 500 --no-pager 2>/dev/null " +
+            // 候选 3：全量 system journal 找 dsh（Unit 名不同/非 systemd 时兜底）
+            "journalctl -n 500 --no-pager 2>/dev/null " +
                 "| grep -oE 'token=[A-Za-z0-9_-]+' | tail -1 | cut -d= -f2",
-            // 候选 3：常见日志文件（手动 nohup 等部署）
+            // 候选 4：常见日志文件（手动 nohup 等部署）
             "for f in ~/.dsh/web.log ~/.dsh/web_log ~/.dsh/dsh-web.log; do " +
                 "grep -oE 'token=[A-Za-z0-9_-]+' \"\$f\" 2>/dev/null; done | tail -1 | cut -d= -f2"
         )
