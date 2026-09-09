@@ -194,7 +194,11 @@ class TuiActivity : Activity() {
 
         statusView?.text = "连接 $user@$host:$port …"
         val client = object : TerminalSessionClient {
-            override fun onTextChanged(changedSession: TerminalSession) {}
+            // Termux 同款：新数据到达必须 onScreenUpdated() → invalidate() + 滚回底部，
+            // 否则字节进了 emulator 但没人重绘，只能等光标闪烁（500ms）时机性刷新 → 打字卡顿。
+            override fun onTextChanged(changedSession: TerminalSession) {
+                if (session === changedSession) terminalView?.onScreenUpdated()
+            }
             override fun onTitleChanged(changedSession: TerminalSession) {}
             override fun onSessionFinished(finishedSession: TerminalSession) {
                 runOnUiThread { statusView?.text = "SSH 会话结束"; statusView?.visibility = View.VISIBLE }
