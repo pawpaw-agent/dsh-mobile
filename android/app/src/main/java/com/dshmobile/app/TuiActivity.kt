@@ -58,13 +58,13 @@ class TuiActivity : Activity() {
 
         /**
          * Termux 默认 extra-keys 布局（等价于 termux.properties 缺省值），
-         * 追加我们不向终端发送的本地功能键：KEYBOARD(收键盘)、A+/A-(字号)。
+         * 每行 7 键保持官方排布，KEYBOARD/A+/A- 并入第二行尾部。
          * 符号→显示名映射与别名由 ExtraKeysInfo(style="default") 处理
          * （←→↑↓、↹、⌫、⎋、⎈、⎇ 等与 Termux 完全一致）。
          */
         const val EXTRA_KEYS_LAYOUT =
-            """[["ESC","/",{"key":"-","popup":"|"},"HOME","UP","END","PGUP","KEYBOARD","A+","A-"],
-               ["TAB","CTRL","ALT","LEFT","DOWN","RIGHT","PGDN"]]"""
+            """[["ESC","/",{"key":"-","popup":"|"},"HOME","UP","END","PGUP"],
+               ["TAB","CTRL","ALT","LEFT","DOWN","RIGHT","PGDN","KEYBOARD","A+","A-"]]"""
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -308,9 +308,10 @@ class TuiActivity : Activity() {
             }
         }
         extraKeysView = extras
-        // 与 Termux 工具栏一致的高度（约 37.5dp），随 windowSoftInputMode=adjustResize
-        // 软键盘弹出时窗口收缩、键排自动顶到键盘上方 —— 无需额外处理
-        val h = (38 * resources.displayMetrics.density).toInt()
+        // 键排高度：两行各约 21dp（Termux 工具栏 37.5dp 是单行；两行布局相应加高），
+        // 随 windowSoftInputMode=adjustResize 软键盘弹出时窗口收缩、
+        // 键排自动顶到键盘上方 —— 无需额外处理
+        val h = (42 * resources.displayMetrics.density).toInt()
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h)
