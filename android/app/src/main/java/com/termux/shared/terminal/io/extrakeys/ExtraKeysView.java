@@ -397,9 +397,9 @@ public final class ExtraKeysView extends GridLayout {
                 button.setTextColor(mButtonTextColor);
                 button.setAllCaps(mButtonTextAllCaps);
                 button.setPadding(0, 0, 0, 0);
-                // dsh-mobile: 默认 13sp（42dp 键排内 HOME/CTRL/PGDN 不截断）；
-                // KEYBOARD（⌨，rowSpan=2 跨两行）用 26sp 放大图标。
-                float textSp = "KEYBOARD".equals(buttonInfo.getKey()) ? 26f : 13f;
+                // dsh-mobile: 普通键 15sp（50dp 键排内 HOME/CTRL/PGDN 不截断，
+                // 列宽 180px 实测余量 ~35%）；KEYBOARD（rowSpan=2 跨两行）30sp。
+                float textSp = "KEYBOARD".equals(buttonInfo.getKey()) ? 30f : 15f;
                 button.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, textSp);
 
                 button.setOnClickListener(view -> {

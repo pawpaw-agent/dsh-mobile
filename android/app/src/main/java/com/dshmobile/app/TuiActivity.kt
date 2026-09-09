@@ -304,10 +304,10 @@ class TuiActivity : Activity() {
             }
         }
         extraKeysView = extras
-        // 键排高度：两行各约 21dp（Termux 工具栏 37.5dp 是单行；两行布局相应加高），
+        // 键排高度：每行 25dp（两行共 50dp；⌨ 跨两行 = 50dp ≈ 最小可点击目标 48dp），
         // 随 windowSoftInputMode=adjustResize 软键盘弹出时窗口收缩、
         // 键排自动顶到键盘上方 —— 无需额外处理
-        val h = (42 * resources.displayMetrics.density).toInt()
+        val h = (50 * resources.displayMetrics.density).toInt()
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h)
