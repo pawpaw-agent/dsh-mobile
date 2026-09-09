@@ -182,18 +182,23 @@ class TuiActivity : Activity() {
         //  - password（默认）：DROPBEAR_PASSWORD 环境变量（补丁后 getpass 不再需要，
         //    与 Termux 原版 ssh 体验一致）。
         //  - key：-i 导入的私钥；缺私钥时尝试自动生成（dropbearkey）。
+        //
+        // TERM 必须传：TerminalSession 用给定 env 启动 dbclient（不继承父进程），
+        // 缺少 TERM 时远端 bash 的 tput setaf 探测失败 → color_prompt=no → 无颜色。
+        // xterm-256color 让远端提示符 / ls / dircolors 全部恢复彩色。
         val env: Array<String>?
         val keyArgs: Array<String>
         val homeDir = filesDir.absolutePath   // dbclient 写 known_hosts/.ssh 用（避免落到 /data/.ssh 报权限）
+        val baseEnv = arrayOf("HOME=$homeDir", "TERM=xterm-256color")
         if (authType == "key") {
             val keyPath = resolveKeyPath() ?: run {
                 statusView?.text = "SSH 密钥不可用，请回连接屏导入私钥"
                 return
             }
-            env = arrayOf("HOME=$homeDir")
+            env = baseEnv
             keyArgs = arrayOf("-i", keyPath)
         } else {
-            env = arrayOf("HOME=$homeDir", "DROPBEAR_PASSWORD=$password")
+            env = baseEnv + "DROPBEAR_PASSWORD=$password"
             keyArgs = arrayOf()
         }
 
