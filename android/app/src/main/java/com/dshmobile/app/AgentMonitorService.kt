@@ -50,9 +50,24 @@ class AgentMonitorService : Service() {
     override fun onCreate() {
         super.onCreate()
         ensureNotificationChannel()
-        startForeground(FGS_ID, monitorNotification("DSH Mobile"))
-        connect()
+        // startForeground 必须在 onStartCommand 中做（幂等）：Android 要求每次
+        // startForegroundService 后 5s 内必须 startForeground()。若服务实例
+        // 仍存活（上次 stopSelf 后销毁未完成），系统复用实例不会走 onCreate，
+        // 只回调 onStartCommand —— 这里修复由此导致的
+        // ForegroundServiceDidNotStartInTimeException（退后台即崩溃）。
     }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!foregroundStarted) {
+            startForeground(FGS_ID, monitorNotification("DSH Mobile"))
+            foregroundStarted = true
+        }
+        connect()
+        return START_STICKY
+    }
+
+    private var foregroundStarted = false
+    private val connectStarted = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private fun openAppIntent(): PendingIntent {
         val i = Intent(this, MainActivity::class.java).apply {
@@ -84,6 +99,7 @@ class AgentMonitorService : Service() {
             .build()
 
     private fun connect() {
+        if (!connectStarted.compareAndSet(false, true)) return
         val prefs = prefs(this)
         val base = prefs.getString("url", null) ?: run { stopSelf(); return }
         val launchToken = prefs.getString("server_token", "")?.trim().orEmpty()
@@ -169,8 +185,6 @@ class AgentMonitorService : Service() {
             }
         }.start()
     }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onDestroy() {
         client?.stop()
