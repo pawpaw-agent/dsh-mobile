@@ -1,39 +1,37 @@
 package com.dshmobile.protocol
 
 import android.util.Log
-import com.jcraft.jsch.JSch
-import com.jcraft.jsch.Session
 import org.json.JSONObject
 import java.io.Closeable
 import java.io.File
 import java.net.InetSocketAddress
-import java.util.Properties
+import java.net.ServerSocket
+import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * 内置 SSH 本地端口转发（合规的远程完整访问路径，官方文档认可的方案）。
+ * SSH 本地端口转发 —— dbclient 进程方案（方案 B）。
  *
- * 原理：在手机本机监听 127.0.0.1:<localPort>，经 SSH 隧道转发到
- * [sshHost] 机器视角的 127.0.0.1:<remotePort]（即 dsh web）。
- * 客户端因此以 http://127.0.0.1:<localPort> 访问 —— 服务端 /api 信任栅栏
- * 看到 Host: 127.0.0.1 判定为回环 → 配置平面（settings/credentials 等）放行。
+ * 与终端模式（TuiActivity）共用同一我们 CI 编译的 dropbear dbclient：
+ * 密码/证书/TOFU（-y）/known_hosts（HOME）走完全一致的环境变量与参数，
+ * 不再引入第二套 SSH 实现（JSch 依赖移除后，认证行为 100% 统一）。
  *
- * 实现基于 JSch（com.github.mwiede:jsch）：
- *  - 使用 JCE 默认 provider，Android 的 Conscrypt 原生支持 EC/X25519
- *  - 不依赖 sshj / Android 内置精简 BouncyCastle（它没有 X25519/EC）
- *  - 不注册完整 BC，避免低内存 Android 设备 OOM
+ * 转发实现：`dbclient -p <sshPort> -y -q -K 30 -N
+ *   -L 127.0.0.1:<localPort>:<remoteHost>:<remotePort> user@host`
+ *  - `-N`：不执行远程命令（纯隧道）
+ *  - `-L`：本地转发。注意 dropbear 的 -L 端口 0 **不自分配**（JSch 有此能力，
+ *    dbclient 没有），因此本地端口由本类预选（bind(0) 拿系统分配的空闲端口）。
+ *  - 断线：dbclient 进程退出 → 看门狗检测 → 重建（新端口 → onLocalBaseChanged）。
  *
- * 用法：
- * ```
- * val tunnel = SshTunnel(
- *     sshHost = "my-pc.example.com", sshPort = 22, sshUser = "xsj",
- *     remoteHost = "127.0.0.1", remotePort = 3080,
- *     auth = SshTunnel.Password("...")   // 或 SshTunnel.KeyPair(file, passphrase)
- * )
- * tunnel.start()
- * val client = DshClient("http://127.0.0.1:${tunnel.localPort}")
- * ```
- * 断线自动重连；[close] 释放。
+ * 令牌获取（[execOnce]）：同样用 dbclient 一次性进程执行
+ * `dbclient -y -q -K 0 user@host "<cmd>"` 收集 stdout（命令模式无 pty）。
+ *
+ * 对外契约与旧 JSch 版一致（start/localBaseUrl/onStateChange/
+ * onLocalBaseChanged/close/execOnce），调用方无需改动。
+ *
+ * dbclient 路径：DshApp.onCreate 通过 [binPath] 注入（Application 有
+ * applicationInfo.nativeLibraryDir；SshTunnel 自身无 Context）。
  */
 class SshTunnel(
     private val sshHost: String,
@@ -51,8 +49,8 @@ class SshTunnel(
 
     private val started = AtomicBoolean(false)
     private val connecting = AtomicBoolean(false)
-    @Volatile private var everConnected = false
-    @Volatile private var session: Session? = null
+    private val retrySeq = AtomicInteger(0)
+    @Volatile private var proc: Process? = null
     @Volatile private var localPort: Int = 0
     private var reconnectThread: Thread? = null
 
@@ -62,7 +60,7 @@ class SshTunnel(
 
     @Volatile var onStateChange: ((String) -> Unit)? = null  // connecting / connected / reconnecting
 
-    /** 本地端口/基址变化（SSH 断线重连后会更换端口）；WebView 需据此重新加载。 */
+    /** 本地端口/基址变化（断线重连后会更换端口）；调用方需据此重新加载。 */
     @Volatile var onLocalBaseChanged: ((String) -> Unit)? = null
 
     /** 建立隧道并阻塞等待本地监听就绪（最多 ~10s）。成功返回本地端口。 */
@@ -71,7 +69,7 @@ class SshTunnel(
         if (started.get()) return localPort
         started.set(true)
         connectOnce()
-        // 守护重连
+        // 守护重连：dbclient 进程退出（网络断/服务端关）后重建
         reconnectThread = Thread {
             while (started.get()) {
                 if (!isAlive()) {
@@ -86,225 +84,165 @@ class SshTunnel(
         return localPort
     }
 
-    private fun isAlive(): Boolean =
-        session?.isConnected == true && localPort > 0 && localListening()
+    private fun isAlive(): Boolean {
+        val p = proc ?: return false
+        if (!p.isAlive) return false
+        return localPort > 0 && localListening()
+    }
 
     private fun localListening(): Boolean = try {
-        java.net.Socket().use { it.connect(InetSocketAddress("127.0.0.1", localPort), 500) }
+        Socket().use { it.connect(InetSocketAddress("127.0.0.1", localPort), 500) }
         true
     } catch (_: Exception) { false }
 
+    /**
+     * 预选空闲端口。dbclient -L 不接受端口 0，我们必须先确定具体端口；
+     * bind(0) 分配后立即释放，存在极小竞态（他人抢注）——重试缓解。
+     */
+    private fun pickFreePort(): Int = try {
+        ServerSocket(0).use { it.localPort }
+    } catch (_: Exception) {
+        // 兜底：10240 起循环（每次 +37 避开常见段）
+        (10240 + (retrySeq.incrementAndGet() * 37) % 20000)
+    }
+
     private fun connectOnce() {
         onStateChange?.invoke("connecting")
-        try {
-            val jsch = JSch()
-            val s = buildSession(jsch)
-            s.connect(10_000)
-            // 0 = 让 JSch 自己分配空闲端口，避免手动占/释放端口导致的 Already bound
-            val port = s.setPortForwardingL("127.0.0.1", 0, remoteHost, remotePort)
-            session = s
-            localPort = port
-            val base = "http://127.0.0.1:$port"
-            val changed = localBaseUrl != base
-            val first = !everConnected
-            localBaseUrl = base
-            everConnected = true
-            onStateChange?.invoke("connected")
-            // 首次连接由调用方负责加载；仅断线重连换端口时通知 WebView 跟随新基址
-            if (changed && !first) onLocalBaseChanged?.invoke(base)
-        } catch (e: Exception) {
-            Log.w(TAG, "ssh tunnel connect failed: ${e.message}")
-            try { session?.disconnect() } catch (_: Exception) {}
-            session = null
-            localBaseUrl = null
-            if (!everConnected) onStateChange?.invoke("failed")
-            else onStateChange?.invoke("reconnecting")
+        val bin = binPath
+        if (bin == null) {
+            Log.e(TAG, "dbclient path not set — DshApp.onCreate should inject it")
+            onStateChange?.invoke("failed: 内部错误（dbclient 路径未设置）")
+            return
+        }
+        for (attempt in 1..3) {
+            if (!started.get()) return
+            val port = pickFreePort()
+            val args = mutableListOf(
+                bin,
+                "-p", sshPort.toString(),
+                "-y",                 // 首连接受未知主机公钥（TOFU，与终端模式一致）
+                "-q",                 // 静默 remote banner/日志
+                "-K", "30",           // keepalive 30s（对齐旧 JSch serverAliveInterval=30s）
+                "-N",                 // 纯隧道，不执行远程命令
+                "-L", "127.0.0.1:$port:$remoteHost:$remotePort"
+            )
+            if (auth is Auth.KeyPair) {
+                args += listOf("-i", auth.privateKeyFile.absolutePath)
+                auth.passphrase?.takeIf { it.isNotEmpty() }?.let { Log.w(TAG, "key passphrase unsupported by dbclient CLI; try without") }
+            }
+            args += "$sshUser@$sshHost"
+            Log.i(TAG, "dbclient tune #$attempt: ${args.joinToString(" ").take(160)}")
+            try {
+                val pb = ProcessBuilder(args).redirectErrorStream(true)
+                pb.environment().clear()
+                baseEnv().forEach { (k, v) -> pb.environment().put(k, v) }
+                val p = pb.start()
+                // 立即等待端口就绪（进程可能秒退：认证失败等）
+                waitForLocal(port, p, timeoutMs = 8_000)
+                if (!p.isAlive) {
+                    val err = p.inputStream.bufferedReader().readText().trim()
+                    Log.w(TAG, "dbclient tune #$attempt exited rc=${p.exitValue()}: ${err.take(200)}")
+                    if (attempt == 3) onStateChange?.invoke("failed: $err")
+                    continue
+                }
+                proc = p
+                localPort = port
+                val base = "http://127.0.0.1:$port"
+                val changed = localBaseUrl != base
+                val first = localBaseUrl == null
+                localBaseUrl = base
+                pumpLogs(p)
+                onStateChange?.invoke("connected")
+                if (changed && !first) onLocalBaseChanged?.invoke(base)
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "dbclient launch failed: ${e.message}")
+                if (attempt == 3) onStateChange?.invoke("failed: ${e.message}")
+            }
         }
     }
 
-    private fun defaultConfig(): Properties = Properties().apply {
-        // 与桌面 ssh 的 first-use 行为对齐：首连接受未知主机公钥（TOFU）。
-        put("StrictHostKeyChecking", "no")
-        put("PreferredAuthentications", "password,publickey,keyboard-interactive")
+    /** 轮询本地端口可连 + 进程存活，等待隧道就绪。返回进程是否仍存活。 */
+    private fun waitForLocal(port: Int, p: Process, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (!p.isAlive) return false
+            if (try {
+                Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 200) }
+                true
+            } catch (_: Exception) { false }) return true
+            try { Thread.sleep(100) } catch (_: InterruptedException) { return false }
+        }
+        return false
+    }
+
+    /** 消费 dbclient 输出（-q 后信息很少，认证错误行仍会打印），避免管道阻塞。 */
+    private fun pumpLogs(p: Process) {
+        Thread {
+            try { p.inputStream.bufferedReader().forEachLine { Log.i(TAG, "dbclient: $it") } }
+            catch (_: Exception) {}
+        }.apply { isDaemon = true; name = "dbclient-log"; start() }
+    }
+
+    /** 与终端模式一致的认证 env（HOME 写 known_hosts；密码经 DROPBEAR_PASSWORD）。 */
+    private fun baseEnv(): Map<String, String> {
+        val m = mutableMapOf(
+            "HOME" to (System.getenv("HOME") ?: "/data/data/com.dshmobile.app"),
+            "TERM" to "xterm-256color"
+        )
+        if (auth is Auth.Password) m["DROPBEAR_PASSWORD"] = auth.password
+        return m
     }
 
     /**
-     * 打开一个 PTY shell 通道（TUI 模式用）：独立于端口转发隧道的 SSH 会话，
-     * 建立后把远端 shell 的原始字节流通过 [onData] 桥接到终端渲染（如
-     * Termux TerminalView 的 TerminalEmulator）。
-     *
-     * 注意：本方法持有的 SSH 会话与 [start] 的隧道会话相互独立——
-     * [close] 只关闭转发隧道；shell 会话由调用方通过返回的 [ShellHandle] 管理。
-     *
-     * @param termType 远端 $TERM（默认 xterm-256color）
-     * @param rows/cols 初始 PTY 尺寸（Termux TerminalView 会在 resize 时更新）
-     * @param onReady 通道打开并完成 PTY 协商后回调（可在此处写启动命令）
-     * @param onData 远端输出（含回显、ANSI 序列）——须在 UI 线程消费
-     * @param onExit 通道关闭/异常（退出码或 -1）
+     * 在远端执行一条命令并收集 stdout（一次性 dbclient 进程，跑完即断）。
+     * 命令模式：无 pty（不分配 tty），远端命令结束后 dbclient 自动退出。
+     * 超时后杀进程返回已收集内容；失败返回 null。
      */
-    fun openShell(
-        termType: String = "xterm-256color",
-        rows: Int = 24,
-        cols: Int = 80,
-        onReady: (ShellHandle) -> Unit,
-        onData: (ByteArray) -> Unit,
-        onExit: (Int) -> Unit,
-    ): ShellHandle? {
+    fun execOnce(cmd: String, timeoutMs: Long = 8_000): String? {
+        val bin = binPath ?: return null
+        val args = mutableListOf(
+            bin,
+            "-p", sshPort.toString(),
+            "-y", "-q", "-K", "0",
+        )
+        if (auth is Auth.KeyPair) args += listOf("-i", auth.privateKeyFile.absolutePath)
+        args += listOf("$sshUser@$sshHost", cmd)
         return try {
-            val jsch = JSch()
-            val s = buildSession(jsch)
-            s.connect(10_000)
-            Log.i(TAG, "openShell: session connected to $sshHost:$sshPort")
-            val channel = s.openChannel("shell") as com.jcraft.jsch.ChannelShell
-            // 显式开启 PTY：不同 JSch 版本 ChannelShell 的 pty 默认值不同，
-            // 不显式 setPty(true) 时 pty-req 可能从未发送 → sshd 无 pty →
-            // 非交互 shell、会话随启动立即关闭（"session opened/closed" 成对出现）。
-            channel.setPty(true)
-            channel.setPtyType(termType)
-            channel.setPtySize(cols, rows, 0, 0)
-            // 先连接再启动输出泵，避免读到未连接通道的流而误报退出
-            channel.connect(10_000)
-            Log.i(TAG, "openShell: channel connected (pty=$termType ${cols}x${rows})")
-            // 输出流逐块转发（Termux terminal-emulator 的 write() 消费）
-            var totalBytes = 0L
-            val pump = Thread {
-                try {
-                    val input = channel.inputStream
-                    val buf = ByteArray(16384)
-                    while (!channel.isClosed && !channel.isEOF) {
-                        val n = try { input.read(buf) } catch (_: Exception) { -1 }
-                        if (n <= 0) break
-                        totalBytes += n
-                        if (totalBytes < 65536 || totalBytes % 65536 == 0L) {
-                            Log.i(TAG, "openShell: received ${totalBytes}B so far (chunk=$n)")
-                        }
-                        onData(buf.copyOf(n))
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "openShell: pump error: ${e.message}", e)
-                } finally {
-                    Log.i(TAG, "openShell: pump exit, total=${totalBytes}B exitStatus=${channel.exitStatus} isClosed=${channel.isClosed} isEOF=${channel.isEOF} connected=${channel.isConnected}")
-                    onExit(channel.exitStatus)
-                }
-            }.apply { isDaemon = true; name = "dsh-shell-pump"; start() }
-            val handle = ShellHandle(channel, s, ::sendShellBytes)
-            onReady(handle)
-            Log.i(TAG, "openShell: onReady delivered (rc=${channel.exitStatus})")
-            handle
+            val pb = ProcessBuilder(args).redirectErrorStream(true)
+            pb.environment().clear()
+            baseEnv().forEach { (k, v) -> pb.environment().put(k, v) }
+            val p = pb.start()
+            val out = StringBuffer()
+            val reader = Thread {
+                try { p.inputStream.bufferedReader().forEachLine { out.append(it).append('\n') } }
+                catch (_: Exception) {}
+            }.apply { isDaemon = true; start() }
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (p.isAlive && System.currentTimeMillis() < deadline) Thread.sleep(100)
+            if (p.isAlive) p.destroy()
+            reader.join(500)
+            out.toString().trim().takeIf { it.isNotEmpty() }
         } catch (e: Exception) {
-            Log.w(TAG, "openShell: failed: ${e.message}", e)
-            onExit(-1)
+            Log.w(TAG, "execOnce failed: ${e.message}")
             null
         }
     }
 
-    /** 向已打开的 shell 通道写原始字节（等价终端输入流）。 */
-    private fun sendShellBytes(channel: com.jcraft.jsch.ChannelShell, data: ByteArray) {
-        try { channel.outputStream.write(data); channel.outputStream.flush() } catch (_: Exception) {}
-    }
-
-    /** 根据认证方式构造（但不连接）JSch Session（与 connectOnce 一致的认证逻辑）。 */
-    private fun buildSession(jsch: JSch): com.jcraft.jsch.Session {
-        val s = when (auth) {
-            is Auth.Password -> {
-                val sess = jsch.getSession(sshUser, sshHost, sshPort)
-                sess.setPassword(auth.password)
-                sess.setConfig(defaultConfig())
-                sess
-            }
-            is Auth.KeyPair -> {
-                val keyPath = auth.privateKeyFile.absolutePath
-                if (auth.passphrase.isNullOrEmpty()) jsch.addIdentity(keyPath)
-                else jsch.addIdentity(keyPath, auth.passphrase.toByteArray())
-                val sess = jsch.getSession(sshUser, sshHost, sshPort)
-                sess.setConfig(defaultConfig())
-                sess
-            }
-        }
-        // 会话保活：30s 发一次 alive 探测（shutdown 时清理），60s 无响应判死
-        s.setServerAliveInterval(30_000)
-        s.setServerAliveCountMax(2)
-        return s
-    }
-
-    /**
-     * 在远端执行一条命令并收集 stdout（一次性，独立会话，跑完即断）。
-     *
-     * 用于自动获取 dsh web 的浏览器认证 token（SSH 场景下服务端有
-     * journald 日志，App 无需用户手输）。超时安全：命令超过 [timeoutMs]
-     * 未结束（或读到 EOF）即返回已收集内容；失败返回 null。
-     *
-     * @return 命令 stdout（已 trim）；失败/空输出返回 null
-     */
-    fun execOnce(cmd: String, timeoutMs: Long = 8_000): String? {
-        return try {
-            val jsch = JSch()
-            val s = buildSession(jsch)
-            s.connect(10_000)
-            try {
-                val channel = s.openChannel("exec") as com.jcraft.jsch.ChannelExec
-                channel.setCommand(cmd)
-                channel.connect(10_000)
-                val input = channel.inputStream
-                val out = java.io.ByteArrayOutputStream()
-                val buf = ByteArray(16 * 1024)
-                val deadline = System.currentTimeMillis() + timeoutMs
-                var closed = false
-                while (!closed && System.currentTimeMillis() < deadline) {
-                    val n = try { input.read(buf) } catch (_: Exception) { -1 }
-                    if (n < 0) { closed = true; break }
-                    if (n > 0) out.write(buf, 0, n)
-                    // EOF 提前退出；JSch 无阻塞 API，短 sleep 让出 CPU
-                    if (channel.isClosed) { closed = true; break }
-                    try { Thread.sleep(50) } catch (_: InterruptedException) { break }
-                }
-                try { channel.disconnect() } catch (_: Exception) {}
-                out.toString(Charsets.UTF_8.name()).trim().takeIf { it.isNotEmpty() }
-            } finally {
-                try { s.disconnect() } catch (_: Exception) {}
-            }
-        } catch (_: Exception) { null }
-    }
-
-    /**
-     * shell 通道句柄：暴露写输入、改 PTY 尺寸、关闭通道等 TUI 需要的能力。
-     * 关闭时同时释放其专享的 SSH 会话（不碰转发隧道）。
-     */
-    class ShellHandle(
-        private val channel: com.jcraft.jsch.ChannelShell,
-        private val session: com.jcraft.jsch.Session,
-        private val writer: (com.jcraft.jsch.ChannelShell, ByteArray) -> Unit,
-    ) : Closeable {
-        /** 远端 shell 是否有输出可写（写前检查）。 */
-        val isOpen: Boolean get() = channel.isConnected && session.isConnected
-
-        /** 写入输入字节（软键盘/键排合成的事件序列）。 */
-        fun write(data: ByteArray) = writer(channel, data)
-
-        fun write(text: String) = writer(channel, text.toByteArray(Charsets.UTF_8))
-
-        /** 通知远端终端尺寸变化（TUI 界面随软键盘弹起/收起自适应）。 */
-        fun setSize(rows: Int, cols: Int) {
-            try { channel.setPtySize(cols, rows, 0, 0) } catch (_: Exception) {}
-        }
-
-        override fun close() {
-            try { channel.disconnect() } catch (_: Exception) {}
-            try { session.disconnect() } catch (_: Exception) {}
-        }
-    }
-
-
     override fun close() {
         started.set(false)
         reconnectThread?.interrupt()
-        try { session?.disconnect() } catch (_: Exception) {}
-        session = null
+        try { proc?.destroy() } catch (_: Exception) {}
+        proc = null
         localBaseUrl = null
     }
 
     companion object {
         private const val TAG = "SshTunnel"
+
+        /** dbclient 可执行文件路径：由 DshApp.onCreate 注入（nativeLibraryDir/libdbclient.so）。 */
+        @Volatile
+        var binPath: String? = null
 
         /** 从连接屏 JSON 配置构造（host/port/user/auth 持久化在 SharedPreferences）。 */
         fun fromJson(o: JSONObject): SshTunnel {

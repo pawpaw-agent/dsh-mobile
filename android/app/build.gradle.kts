@@ -48,9 +48,6 @@ dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.webkit:webkit:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    // JSch 比 sshj 更适合 Android：走 JCE 默认 provider（Conscrypt 有 EC/X25519），
-    // 不依赖 Android 残缺 BouncyCastle，也不需要注册完整 BC。
-    implementation("com.github.mwiede:jsch:0.2.21")
     // Termux 终端组件（GPL-3.0，见项目 LICENSE）：TUI 模式的终端渲染 + 软键盘交互。
     // JitPack 多模块坐标：group 为 termux/termux-app 仓库点分路径（否则 Gradle
     // 会把 4 段坐标当成 group:artifact:version:module 而找不到）。

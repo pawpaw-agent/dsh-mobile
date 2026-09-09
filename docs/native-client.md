@@ -12,7 +12,7 @@
   因此直接实现 DSH 协议的两个 downlink WebSocket + unary RPC：
   - **unary RPC**：`POST /api/<method>`，body 为 `client-request` JSON，校验 `rpcId` 回显。
   - **事件流**：`/api/events.mux` + `/api/events.host` 两个 downlink-only WebSocket（每帧一个 `server-request` JSON）。
-- **SSH 隧道**：`SshTunnel`（JSch）通过本地端口转发让 WebView/后台服务都能以回环身份访问配置平面。
+- **SSH 隧道**：`SshTunnel`（dbclient 进程）通过本地端口转发让 WebView/后台服务都能以回环身份访问配置平面。
 
 ## 模块结构
 
@@ -52,7 +52,7 @@ com.dshmobile/
 - unary 业务接口（会话、模型、工作区、事件流）远程可用。
 - **配置平面**（`settings.*`、`credentials.*`、`agentPreset` 写、`host.pickDirectory/openPath`、`llm.discoverModels`）**仅回环可访问**（`PRIVILEGED_METHODS`）。
 - 远程合规方案：SSH 端口转发 `ssh -L 3080:127.0.0.1:3080 用户@电脑IP`，客户端填 `http://127.0.0.1:3080`（从服务端视角仍是回环）。
-- App 内置 `SshTunnel`（JSch）实现同样的本地端口转发，支持密码/私钥认证、断线自动重连；WebView 模式下 App 重启后会自动重建隧道并重新加载新端口。
+- App 内置 `SshTunnel`（dropbear dbclient 子进程）实现同样的本地端口转发，支持密码/私钥认证、断线自动重连；WebView 模式下 App 重启后会自动重建隧道并重新加载新端口。
 
 ## 已实现的核心交互（App 内可见功能都由 WebView 承担）
 
@@ -67,4 +67,4 @@ com.dshmobile/
 
 - 后台服务的所有网络调用在后台线程执行（`Thread { ... }`）。
 - 事件流回调带 `(envelope rpcId, payload)`，`rpcId` 用于应答 `server-request`（审批/提问，后台通知目前只消费 host 状态）。
-- 依赖 OkHttp（`com.squareup.okhttp3:okhttp:4.12.0`）、JSch（`com.github.mwiede:jsch:0.2.21`，仅 SSH 隧道用）；JSON 用 Android 内置 `org.json`，无额外序列化库。
+- 依赖 OkHttp（`com.squareup.okhttp3:okhttp:4.12.0`）（SSH 隧道与终端共用同一个 dropbear dbclient 二进制）；JSON 用 Android 内置 `org.json`，无额外序列化库。
