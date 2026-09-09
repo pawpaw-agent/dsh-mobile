@@ -38,6 +38,7 @@ import com.dshmobile.protocol.SshTunnel
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * dsh-mobile 连接屏 —— 纯 WebView 版：
@@ -63,6 +64,13 @@ class MainActivity : Activity() {
     private var pendingAuth: HttpAuthHandler? = null
     private var statusView: TextView? = null
     private var sshKeyPathInput: EditText? = null
+    private var disconnectButton: Button? = null
+
+    /** 连接进行中守卫：防连点「连接」并发多个隧道/多次设置回调。 */
+    private val connecting = AtomicBoolean(false)
+
+    /** 通知权限询问进行中（权限对话框本身会触发 onPause，防重入再弹）。 */
+    private var notificationAskInFlight = false
 
     /**
      * 当前 URL 是否已成功完成过 token 交换（cookie 已种下）。
@@ -372,13 +380,15 @@ class MainActivity : Activity() {
         val port = savedSsh.optInt("sshPort", 22)
         val remotePort = savedSsh.optInt("remotePort", DEFAULT_PORT.toInt())
         val app = application as DshApp
+        // 用户可能已在连接屏手动点了「连接」：自动恢复不抢占
+        if (!beginConnect()) return
         status("自动重建 SSH 隧道…")
         connectView?.visibility = View.VISIBLE
         Thread {
             val auth = if (savedSsh.optString("authType", "password") == "key") {
                 val keyPath = savedSsh.optString("keyPath", "")
                 if (keyPath.isBlank()) {
-                    runOnUiThread { status("SSH 私钥路径为空，请在连接屏重新配置") }
+                    runOnUiThread { status("SSH 私钥路径为空，请在连接屏重新配置"); endConnect() }
                     return@Thread
                 }
                 SshTunnel.Auth.KeyPair(
@@ -388,6 +398,8 @@ class MainActivity : Activity() {
             } else {
                 SshTunnel.Auth.Password(savedSsh.optString("password", ""))
             }
+            // 旧隧道先关（重复启动/切模式的泄漏点）
+            closeCurrentTunnel()
             val tunnel = SshTunnel(
                 sshHost = host, sshPort = port, sshUser = user,
                 remoteHost = savedSsh.optString("remoteHost", "127.0.0.1"),
@@ -406,20 +418,23 @@ class MainActivity : Activity() {
             }
             tunnel.start()
             val base = tunnel.localBaseUrl
+            // 失败先退：隧道没起来就不再干跑 token 探测（4×8s 白等）
+            if (base == null) {
+                tunnel.close()
+                runOnUiThread { status("自动连接失败，请在连接屏手动重试"); endConnect() }
+                return@Thread
+            }
             // 自动获取最新 token（服务重启后旧 token 失效；失败静默回退）
             autoFetchToken(tunnel)
             runOnUiThread {
-                if (base == null) {
-                    tunnel.close()
-                    status("自动连接失败，请在连接屏手动重试")
-                    return@runOnUiThread
-                }
                 app.sshTunnel = tunnel
                 prefs.edit().putString("url", base).apply()
                 connectView?.visibility = View.GONE
                 lastUrl = base
                 sshTokenAck = false
                 connectWeb(base)
+                refreshConnectState()
+                endConnect()
             }
         }.start()
     }
@@ -674,6 +689,7 @@ class MainActivity : Activity() {
                 sshTokenAck = false
 
                 val remotePort = portInput.text.toString().trim().ifEmpty { DEFAULT_PORT }.toIntOrNull() ?: 3080
+                // 先完成全部校验，再进入连接守卫（校验失败不阻塞后续状态）
                 if (useSsh) {
                     val sh = sshHostInput.text.toString().trim()
                     val su = sshUserInput.text.toString().trim()
@@ -684,8 +700,10 @@ class MainActivity : Activity() {
                         if (path.isBlank()) { status("请选择 SSH 私钥"); return@setOnClickListener }
                         SshTunnel.Auth.KeyPair(File(path), keyPassInput.text.toString().ifEmpty { null })
                     } else {
+                        if (sshPassInput.text.toString().isEmpty()) { status("请填写 SSH 密码"); return@setOnClickListener }
                         SshTunnel.Auth.Password(sshPassInput.text.toString())
                     }
+                    if (!beginConnect()) return@setOnClickListener
                     connectViaSsh(sh, sport, su, remotePort, auth)
                 } else {
                     val host = hostInput.text.toString().trim()
@@ -696,8 +714,11 @@ class MainActivity : Activity() {
                         .putString(PREF_SERVER_HOST, host)
                         .putString(PREF_SERVER_PORT, remotePort.toString())
                         .apply()
-                    val url = "$proto://$host:$remotePort"
-                    connectWeb(url)
+                    if (!beginConnect()) return@setOnClickListener
+                    // 直连模式不需要隧道：关掉 SSH 遗留隧道（模式切换防泄漏）
+                    closeCurrentTunnel()
+                    connectWeb("$proto://$host:$remotePort")
+                    endConnect()
                 }
             }
         }, rowParams(top = dp(12), height = dp(44), width = ViewGroup.LayoutParams.MATCH_PARENT))
@@ -716,14 +737,35 @@ class MainActivity : Activity() {
             setTextColor(COL_TEXT)
             setBackgroundResource(R.drawable.bg_button_secondary)
             setOnClickListener {
-                // 未配置 SSH 时提示先填 SSH 信息
-                if (prefs.getString("ssh_json", null) == null) {
-                    status("请先启用 SSH 隧道并填写主机/用户名")
-                    return@setOnClickListener
+                // 终端模式直接使用连接屏当前填写的字段（不要求 WebView 先连接成功）：
+                // 校验通过即持久化，TuiActivity 从 ssh_json 读取。
+                val sh = sshHostInput.text.toString().trim()
+                val su = sshUserInput.text.toString().trim()
+                val sport = sshPortInput.text.toString().trim().toIntOrNull() ?: 22
+                if (sh.isBlank() || su.isBlank()) { status("请先填写 SSH 主机/用户名"); return@setOnClickListener }
+                val auth = if (authKeyBtn.isChecked) {
+                    val path = keyPathInput.text.toString().trim()
+                    if (path.isBlank()) { status("请选择 SSH 私钥"); return@setOnClickListener }
+                    SshTunnel.Auth.KeyPair(File(path), keyPassInput.text.toString().ifEmpty { null })
+                } else {
+                    if (sshPassInput.text.toString().isEmpty()) { status("请填写 SSH 密码"); return@setOnClickListener }
+                    SshTunnel.Auth.Password(sshPassInput.text.toString())
                 }
+                val remotePort = portInput.text.toString().trim().ifEmpty { DEFAULT_PORT }.toIntOrNull() ?: 3080
+                persistSshConfig(sh, sport, su, remotePort, auth)
                 startActivity(Intent(this@MainActivity, TuiActivity::class.java))
             }
         }, rowParams(top = dp(10), height = dp(44), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // 断开连接：停止 SSH 隧道并回到连接屏（直连模式仅回连接屏）
+        disconnectButton = Button(this).apply {
+            text = "断开连接（停止隧道）"
+            isAllCaps = false
+            setTextColor(COL_ERROR)
+            setBackgroundResource(R.drawable.bg_button_secondary)
+            setOnClickListener { disconnectCurrent() }
+        }
+        card.addView(disconnectButton!!, rowParams(top = dp(10), height = dp(44), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         return scroll
     }
@@ -834,6 +876,8 @@ class MainActivity : Activity() {
         status("SSH 隧道建立中… $sshUser@$sshHost")
         val app = application as DshApp
         Thread {
+            // 旧隧道先关（重复连接/模式切换的泄漏点）
+            closeCurrentTunnel()
             val tunnel = SshTunnel(
                 sshHost = sshHost, sshPort = sshPort, sshUser = sshUser,
                 remoteHost = "127.0.0.1", remotePort = remotePort,
@@ -849,10 +893,18 @@ class MainActivity : Activity() {
             }
             tunnel.start()
             val base = tunnel.localBaseUrl
+            // 失败先退：隧道没起来就不再干跑 token 探测（4×8s 白等）
+            if (base == null) {
+                tunnel.close()
+                runOnUiThread {
+                    status("隧道建立失败（检查 SSH 主机/端口/用户/认证）")
+                    endConnect()
+                }
+                return@Thread
+            }
             // 自动获取最新 token（服务重启后旧 token 失效；失败静默回退）
             autoFetchToken(tunnel)
             runOnUiThread {
-                if (base == null) { tunnel.close(); status("隧道建立失败（检查 SSH 主机/端口/用户/认证）"); return@runOnUiThread }
                 persistSshConfig(sshHost, sshPort, sshUser, remotePort, auth)
                 prefs.edit()
                     .putString(PREF_SERVER_PROTO, "http")
@@ -862,6 +914,8 @@ class MainActivity : Activity() {
                 app.sshTunnel = tunnel
                 sshTokenAck = false
                 connectWeb(base)
+                refreshConnectState()
+                endConnect()
             }
         }.start()
     }
@@ -958,7 +1012,7 @@ class MainActivity : Activity() {
                     isAllCaps = false
                     setTextColor(COL_TEXT)
                     setBackgroundResource(R.drawable.bg_button_secondary)
-                    setOnClickListener { hideErrorPage(); connectView?.visibility = View.VISIBLE }
+                    setOnClickListener { hideErrorPage(); connectView?.visibility = View.VISIBLE; refreshConnectState() }
                 }, rowParams(top = dp(12), height = dp(48), width = dp(200)))
             }
             (webView?.parent as? ViewGroup)?.addView(errorView)
@@ -1019,7 +1073,7 @@ class MainActivity : Activity() {
                     isAllCaps = false
                     setTextColor(COL_ACCENT_TEXT)
                     setBackgroundResource(R.drawable.bg_button_primary)
-                    setOnClickListener { hideErrorPage(); connectView?.visibility = View.VISIBLE }
+                    setOnClickListener { hideErrorPage(); connectView?.visibility = View.VISIBLE; refreshConnectState() }
                 }, rowParams(top = dp(24), height = dp(48), width = dp(200)))
                 addView(Button(this@MainActivity).apply {
                     text = "重试"
@@ -1042,6 +1096,7 @@ class MainActivity : Activity() {
         super.onResume()
         webView?.onResume(); webView?.resumeTimers()
         AgentMonitorService.stop(this) // 回前台：页面自己能看到，停掉监听服务
+        refreshConnectState()
     }
 
     override fun onPause() {
@@ -1051,13 +1106,23 @@ class MainActivity : Activity() {
         if (prefs.getString("url", null) != null) requestNotifyPermissionThenMonitor()
     }
 
-    /** Android 13+ 通知运行时权限；已授权/被拒都尝试启动（无权限时通知静默不响，不影响 FGS）。 */
+    /** Android 13+ 通知运行时权限；已授权/被拒都尝试启动（无权限时通知静默不响，不影响 FGS）。
+     * 只询问一次（notify_asked），且 in-flight 守卫防权限对话框触发 onPause 导致的重复请求。 */
     private fun requestNotifyPermissionThenMonitor() {
         if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED &&
+            !notificationAskInFlight &&
+            !prefs.getBoolean("notify_asked", false)) {
+            notificationAskInFlight = true
+            prefs.edit().putBoolean("notify_asked", true).apply()
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
         }
         AgentMonitorService.start(this)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>?, grantResults: IntArray?) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 1001) notificationAskInFlight = false
     }
 
     @Deprecated("Deprecated in Java")
@@ -1065,7 +1130,7 @@ class MainActivity : Activity() {
         when {
             connectView?.visibility == View.VISIBLE -> moveTaskToBack(true)
             webView?.canGoBack() == true -> webView?.goBack()
-            webView?.url?.startsWith("http") == true -> connectView?.visibility = View.VISIBLE
+            webView?.url?.startsWith("http") == true -> { connectView?.visibility = View.VISIBLE; refreshConnectState() }
             else -> moveTaskToBack(true)
         }
     }
@@ -1106,6 +1171,43 @@ class MainActivity : Activity() {
     }
 
     // ── 小工具 ────────────────────────────────────────────────
+    /** 连接守卫：CAS 置位；失败时提示用户等待。 */
+    private fun beginConnect(): Boolean {
+        if (!connecting.compareAndSet(false, true)) {
+            status("正在连接中，请稍候…")
+            return false
+        }
+        return true
+    }
+
+    private fun endConnect() { connecting.set(false) }
+
+    /** 关闭并释放当前 SSH 隧道（无则 no-op）。 */
+    private fun closeCurrentTunnel() {
+        val app = application as DshApp
+        app.sshTunnel?.close()
+        app.sshTunnel = null
+    }
+
+    /** 断开连接：停隧道、清回连 URL、回连接屏。 */
+    private fun disconnectCurrent() {
+        closeCurrentTunnel()
+        prefs.edit().remove("url").apply()
+        sshTokenAck = false
+        unauthorizedCleanTried = false
+        webView?.stopLoading()
+        webView?.loadUrl("about:blank")
+        connectView?.visibility = View.VISIBLE
+        refreshConnectState()
+        status("已断开")
+    }
+
+    /** 按隧道状态刷新连接屏上的「断开连接」按钮。 */
+    private fun refreshConnectState() {
+        disconnectButton?.visibility =
+            if ((application as DshApp).sshTunnel != null) View.VISIBLE else View.GONE
+    }
+
     private fun spacer(h: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, h) }
     private fun rowParams(top: Int = 0, width: Int = ViewGroup.LayoutParams.WRAP_CONTENT,
                           height: Int = ViewGroup.LayoutParams.WRAP_CONTENT) =
