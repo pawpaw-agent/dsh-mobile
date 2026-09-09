@@ -149,27 +149,40 @@ class TuiActivity : Activity() {
         val host = cfg?.optString("sshHost") ?: ""
         val user = cfg?.optString("sshUser") ?: ""
         val port = cfg?.optInt("sshPort", 22) ?: 22
+        val password = cfg?.optString("password", "")
+        val authType = cfg?.optString("authType", "password") ?: "password"
         if (cfg == null || host.isBlank() || user.isBlank()) {
             statusView?.text = "未配置 SSH，请先回连接屏填写"
             return
         }
 
-        // 私钥：已有导入的 keyPath 用之；否则用 dropbearkey 生成一对（app 私有）。
-        val keyPath = resolveKeyPath()
-        if (keyPath == null) {
-            statusView?.text = "SSH 密钥不可用，请回连接屏导入私钥"
-            return
+        // 认证方式：
+        //  - password（默认）：DROPBEAR_PASSWORD 环境变量（补丁后 getpass 不再需要，
+        //    与 Termux 原版 ssh 体验一致）。
+        //  - key：-i 导入的私钥；缺私钥时尝试自动生成（dropbearkey）。
+        val env: Array<String>?
+        val keyArgs: Array<String>
+        if (authType == "key") {
+            val keyPath = resolveKeyPath() ?: run {
+                statusView?.text = "SSH 密钥不可用，请回连接屏导入私钥"
+                return
+            }
+            env = null
+            keyArgs = arrayOf("-i", keyPath)
+        } else {
+            env = arrayOf("DROPBEAR_PASSWORD=$password")
+            keyArgs = arrayOf()
         }
 
         val args = arrayOf(
             dbclient.absolutePath,
-            "-i", keyPath,
             "-p", port.toString(),
             "-y",                 // 首连接受未知主机公钥（TOFU，与现有行为一致）
             "-t",                 // 分配 pty（交互终端）
+            *keyArgs,
             "$user@$host"
         )
-        Log.i(TAG, "dbclient: ${args.toList()}")
+        Log.i(TAG, "dbclient: args=${args.toList()} env=${env?.map { it.take(8) + "…" } ?: "key"}")
 
         statusView?.text = "连接 $user@$host:$port …"
         val client = object : TerminalSessionClient {
@@ -193,7 +206,7 @@ class TuiActivity : Activity() {
             override fun logStackTrace(tag: String, e: Exception) {}
         }
         val s = TerminalSession(
-            dbclient.absolutePath, "/", args, null, 5000, client
+            dbclient.absolutePath, "/", args, env, 5000, client
         )
         session = s
         terminalView?.attachSession(s)

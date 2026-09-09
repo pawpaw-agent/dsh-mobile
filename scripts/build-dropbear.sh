@@ -50,6 +50,40 @@ cd dropbear
 # Explicit source path: CWD is dropbear/ here.
 cp "$SCRIPT_DIR/localoptions.h" .
 
+# cli-auth.c patch (python, exact-text): when DROPBEAR_USE_PASSWORD_ENV,
+# never call getpass() (Android bionic lacks it). getenv must return a
+# value; otherwise close with a clear message. Original code is kept under
+# #else so USE_PASSWORD_ENV=0 builds are unchanged.
+python3 - <<'PYEOF'
+import re
+p = 'src/cli-auth.c'
+s = open(p).read()
+old = '''\tif (cli_opts.batch_mode) {
+\t\tdropbear_close("BatchMode active, no interactive session possible.");
+\t}
+
+\tif (!cli_opts.batch_mode) {
+\t\tpassword = getpass(prompt);
+\t}
+
+\t/* 0x03 is a ctrl-c character in the buffer. */
+\tif (password == NULL || strchr(password, '\\3') != NULL) {
+\t\tdropbear_close("Interrupted.");
+\t}'''
+new = '''#if DROPBEAR_USE_PASSWORD_ENV
+\tdropbear_close("DROPBEAR_PASSWORD not set");
+#else
+''' + old + '''
+#endif'''
+if 'DROPBEAR_PASSWORD not set' in s:
+    print('cli-auth already patched')
+else:
+    assert old in s, 'getpass block not found'
+    s = s.replace(old, new, 1)
+    open(p, 'w').write(s)
+    print('cli-auth.c patched: env-only password path')
+PYEOF
+
 make PROGRAMS="$BUILD_ONLY"
 
 # Collect outputs.
