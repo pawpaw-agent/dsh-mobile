@@ -11,7 +11,10 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.ToggleButton
+import com.termux.shared.terminal.io.extrakeys.ExtraKeysConstants
+import com.termux.shared.terminal.io.extrakeys.ExtraKeysInfo
+import com.termux.shared.terminal.io.extrakeys.ExtraKeysView
+import com.termux.shared.terminal.io.extrakeys.SpecialButton
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
@@ -41,17 +44,27 @@ import java.io.File
 class TuiActivity : Activity() {
 
     private var terminalView: TerminalView? = null
+    private var extraKeysView: ExtraKeysView? = null
     private var session: TerminalSession? = null
     private var statusView: TextView? = null
-
-    @Volatile private var ctrlDown = false
 
     private companion object {
         const val TAG = "TuiActivity"
         const val COL_BG = 0xFF0A0A0E.toInt()
         const val COL_TEXT = 0xFFF5F5F7.toInt()
+        const val COL_TEXT_ACTIVE = 0xFF80DEEA.toInt()
         const val COL_MUTED = 0x99FFFFFF.toInt()
         const val KEY_NAME = "id_dropbear"
+
+        /**
+         * Termux 默认 extra-keys 布局（等价于 termux.properties 缺省值），
+         * 追加我们不向终端发送的本地功能键：KEYBOARD(收键盘)、A+/A-(字号)。
+         * 符号→显示名映射与别名由 ExtraKeysInfo(style="default") 处理
+         * （←→↑↓、↹、⌫、⎋、⎈、⎇ 等与 Termux 完全一致）。
+         */
+        const val EXTRA_KEYS_LAYOUT =
+            """[["ESC","/",{"key":"-","popup":"|"},"HOME","UP","END","PGUP","KEYBOARD","A+","A-"],
+               ["TAB","CTRL","ALT","LEFT","DOWN","RIGHT","PGDN"]]"""
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -90,6 +103,8 @@ class TuiActivity : Activity() {
             setTextSize(finalPx)
             setTypeface(Typeface.MONOSPACE)
         }
+        // 修饰键（CTRL/ALT/SHIFT/FN）状态桥接：Termux 同款 —— 由 ExtraKeysView 的
+        // SpecialButton 持有，readXxxKey 时读取并按需自动复位（长按锁定除外）。
         terminalView?.setTerminalViewClient(object : TerminalViewClient {
             override fun onScale(scale: Float): Float = 1f
             // 点击终端区域：聚焦 + 弹软键盘（Termux 同款；仅 requestFocus 不够，
@@ -108,10 +123,10 @@ class TuiActivity : Activity() {
 
             override fun onKeyDown(keyCode: Int, e: android.view.KeyEvent, session: TerminalSession): Boolean = false
             override fun onKeyUp(keyCode: Int, e: android.view.KeyEvent): Boolean = false
-            override fun readControlKey(): Boolean = ctrlDown
-            override fun readAltKey(): Boolean = false
-            override fun readShiftKey(): Boolean = false
-            override fun readFnKey(): Boolean = false
+            override fun readControlKey(): Boolean = readModifier(SpecialButton.CTRL)
+            override fun readAltKey(): Boolean = readModifier(SpecialButton.ALT)
+            override fun readShiftKey(): Boolean = readModifier(SpecialButton.SHIFT)
+            override fun readFnKey(): Boolean = readModifier(SpecialButton.FN)
 
             override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession): Boolean = false
             // emulator 就绪（首次 attach / 尺寸变化）时启动光标闪烁
@@ -127,7 +142,7 @@ class TuiActivity : Activity() {
         column.addView(terminalView, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
         ))
-        column.addView(buildKeyRow())
+        column.addView(buildExtraKeys())
         root.addView(column)
 
         // 状态提示放在最上层（覆盖终端区域），失败信息（如 dbclient 缺失）可见
@@ -267,53 +282,60 @@ class TuiActivity : Activity() {
         return key.absolutePath
     }
 
-    /** 底部常驻键排（Termux extra-keys 思路；覆盖 shell 高频键）。 */
-    private fun buildKeyRow(): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 0, 0, 0)
-            addView(key("ESC") { send("\u001b") })
-            addView(key("TAB") { send("\t") })
-            addView(key("CTRL", toggle = true) { ctrlDown = it })
-            addView(key("←") { send("\u001b[D") })
-            addView(key("↓") { send("\u001b[B") })
-            addView(key("↑") { send("\u001b[A") })
-            addView(key("→") { send("\u001b[C") })
-            addView(key("HOME") { send("\u0001") })
-            addView(key("END") { send("\u0005") })
-            addView(key("⏎", weight = 2f) { send("\r") })
-            addView(key("A+") { adjustFont(2) })
-            addView(key("A-") { adjustFont(-2) })
-        }
-        return row
-    }
-
-    /** 经 Termux 标准路径发送（session.write 写 pty → dbclient → sshd）。 */
-    private fun send(text: String) {
-        val bytes = text.toByteArray(Charsets.UTF_8)
-        session?.write(bytes, 0, bytes.size)
-    }
-
-    private fun key(label: String, weight: Float = 1f, toggle: Boolean = false, onTap: ((Boolean) -> Unit)? = null): View {
-        val btn = ToggleButton(this).apply {
-            text = label
-            textSize = 11f
-            isAllCaps = false
-            setTextColor(COL_TEXT)
-            setBackgroundColor(0x22000000)
-            // 不抢占焦点：点击键排时 TerminalView 保持焦点，软键盘不收起
-            // （Termux ExtraKeysView 同款行为）
-            isFocusable = false
-            isFocusableInTouchMode = false
-            if (toggle) {
-                setOnClickListener { isChecked = !isChecked; onTap?.invoke(isChecked) }
-            } else {
-                setOnClickListener { onTap?.invoke(true) }
+    /**
+     * 底部常驻快捷键栏 —— Termux 官方 ExtraKeysView（原样移植）：
+     *  - 布局 = Termux 默认 extra-keys（ESC / - | 方向键 HOME END PGUP 等）
+     *    + KEYBOARD + A+/A-（我们的本地功能键）
+     *  - 长按方向键自动重复、向上滑弹出 popup、CTRL/ALT 长按锁定 —— 全部 Termux
+     *    原生行为（ExtraKeysView 自带）
+     *  - 客户端 DshTerminalExtraKeys：拦截 KEYBOARD/A+/A-，其余走 Termux 派发器
+     */
+    private fun buildExtraKeys(): View {
+        val extras = ExtraKeysView(this, null).apply {
+            setButtonColors(COL_TEXT, COL_TEXT_ACTIVE, 0x1AFFFFFF, 0xFF4A4A55.toInt())
+            setButtonTextAllCaps(false)
+            setExtraKeysViewClient(
+                DshTerminalExtraKeys(
+                    terminalView!!,
+                    onToggleKeyboard = { toggleSoftKeyboard() },
+                    onAdjustFont = { adjustFont(it) }
+                )
+            )
+            try {
+                reload(ExtraKeysInfo(EXTRA_KEYS_LAYOUT, "default", ExtraKeysConstants.CONTROL_CHARS_ALIASES))
+            } catch (e: Exception) {
+                Log.e(TAG, "extra keys layout failed", e)
             }
         }
-        val lp = LinearLayout.LayoutParams(0, 44, weight).apply { marginEnd = 3 }
-        btn.layoutParams = lp
-        return btn
+        extraKeysView = extras
+        // 与 Termux 工具栏一致的高度（约 37.5dp），随 windowSoftInputMode=adjustResize
+        // 软键盘弹出时窗口收缩、键排自动顶到键盘上方 —— 无需额外处理
+        val h = (38 * resources.displayMetrics.density).toInt()
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h)
+            setBackgroundColor(0xFF16161A.toInt())
+            addView(extras, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+            ))
+        }
+    }
+
+    /** 读取 ExtraKeysView 修饰键状态（Termux 同款：短按单次生效，长按锁定）。 */
+    private fun readModifier(button: SpecialButton): Boolean =
+        extraKeysView?.readSpecialButton(button, true) == true
+
+    /** KEYBOARD 键：软键盘收/呼切换（Termux 同款行为）。 */
+    private fun toggleSoftKeyboard() {
+        val tv = terminalView ?: return
+        val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+                as InputMethodManager
+        if (imm.isAcceptingText) {
+            imm.hideSoftInputFromWindow(tv.windowToken, 0)
+        } else {
+            tv.requestFocus()
+            showSoftKeyboard()
+        }
     }
 
     /**

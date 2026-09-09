@@ -4,3 +4,6 @@ android/.gradle/
 .gradle/
 *.apk
 local.properties
+
+# local APK downloads (CI artifacts)
+apk-dl/
