@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger
  *  - 断线：dbclient 进程退出 → 看门狗检测 → 重建（新端口 → onLocalBaseChanged）。
  *
  * 令牌获取（[execOnce]）：同样用 dbclient 一次性进程执行
- * `dbclient -y -q -K 0 user@host "<cmd>"` 收集 stdout（命令模式无 pty）。
+ * `dbclient -y -q -K 3 user@host "<cmd>"` 收集 stdout（命令模式无 pty）。
  *
  * 对外契约与旧 JSch 版一致（start/localBaseUrl/onStateChange/
  * onLocalBaseChanged/close/execOnce），调用方无需改动。
@@ -204,7 +204,9 @@ class SshTunnel(
         val args = mutableListOf(
             bin,
             "-p", sshPort.toString(),
-            "-y", "-q", "-K", "0",
+            // -K 必须 ≥1：dbclient 拒绝 -K 0（"Bad keepalive '0'"），
+            // 实测认证后命令都不执行——token 自动获取因此全失败（401）。
+            "-y", "-q", "-K", "3",
         )
         if (auth is Auth.KeyPair) args += listOf("-i", auth.privateKeyFile.absolutePath)
         args += listOf("$sshUser@$sshHost", cmd)
