@@ -1,6 +1,8 @@
 package com.dshmobile.app
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.graphics.Typeface
 import android.os.Bundle
 import android.util.Log
@@ -223,8 +225,19 @@ class TuiActivity : Activity() {
             override fun onSessionFinished(finishedSession: TerminalSession) {
                 runOnUiThread { statusView?.text = "SSH 会话结束"; statusView?.visibility = View.VISIBLE }
             }
-            override fun onCopyTextToClipboard(session: TerminalSession, text: String) {}
-            override fun onPasteTextFromClipboard(session: TerminalSession?) {}
+            override fun onCopyTextToClipboard(session: TerminalSession, text: String) {
+                // Termux 同款：长按选择 → 复制菜单 → 写入系统剪贴板。
+                // 空实现会让菜单看起来可用但复制无效果（实测 UI 死交互）。
+                if (text.isEmpty()) return
+                val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("terminal", text))
+            }
+            override fun onPasteTextFromClipboard(session: TerminalSession?) {
+                val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val clip = cm.primaryClip ?: return
+                val paste = clip.getItemAt(0).coerceToText(this).toString()
+                if (paste.isNotEmpty()) session?.emulator?.paste(paste)
+            }
             override fun onBell(session: TerminalSession) {}
             override fun onColorsChanged(session: TerminalSession) {}
             override fun onTerminalCursorStateChange(state: Boolean) {}

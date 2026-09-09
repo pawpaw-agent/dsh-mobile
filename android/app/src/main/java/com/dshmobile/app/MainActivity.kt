@@ -285,11 +285,17 @@ class MainActivity : Activity() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     // 带 ?token= 的成功页面：服务端已 303 换 cookie 并落地干净 URL；
                     // 后续加载成功也记住认证态（cookie 有效期内无需重复 token 交换）。
-                    if (webView?.url?.contains("?token=") == false) sshTokenAck = true
+                    // 只对 http(s) 正式页面置 ack：about:blank 等内部加载不能污染状态
+                    //（1.5.2 断开连接加载 about:blank 会把 ack 误置 true → 省掉 token 交换 → 401）。
+                    val u = webView?.url
+                    if (u?.startsWith("http") == true && !u.contains("?token=")) sshTokenAck = true
                     hideErrorPage()
                 }
                 override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                    if (request?.isForMainFrame == true) showErrorPage(error?.description?.toString() ?: "网络错误")
+                    // ERR_ABORTED = 导航被取消（重载/约谈/加载 about:blank 打断上一请求），不算失败
+                    if (request?.isForMainFrame == true && error?.errorCode != WebViewClient.ERROR_ABORTED) {
+                        showErrorPage(error?.description?.toString() ?: "网络错误")
+                    }
                 }
                 override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, resp: android.webkit.WebResourceResponse?) {
                     if (request?.isForMainFrame == true) {
@@ -1103,13 +1109,15 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         webView?.onPause(); webView?.pauseTimers()
-        // 退后台：若已连接过（有 url），启动 agent 完成通知监听
-        if (prefs.getString("url", null) != null) requestNotifyPermissionThenMonitor()
+        // 通知权限只在首次退后台时询问（一次）；监听服务由 DshApp 的可见性回调启动
+        //（onPause 触发会在打开 TuiActivity 时误启动，已在 DshApp 改为全 UI 不可见才启动）
+        if (prefs.getString("url", null) != null) requestNotifyPermissionOnce()
     }
 
-    /** Android 13+ 通知运行时权限；已授权/被拒都尝试启动（无权限时通知静默不响，不影响 FGS）。
-     * 只询问一次（notify_asked），且 in-flight 守卫防权限对话框触发 onPause 导致的重复请求。 */
-    private fun requestNotifyPermissionThenMonitor() {
+    /** Android 13+ 通知运行时权限：只询问一次（notify_asked），
+     * in-flight 守卫防权限对话框触发 onPause 导致的重复请求。
+     * 无权限时通知静默不响，不影响 FGS 本身。 */
+    private fun requestNotifyPermissionOnce() {
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED &&
             !notificationAskInFlight &&
@@ -1118,7 +1126,6 @@ class MainActivity : Activity() {
             prefs.edit().putBoolean("notify_asked", true).apply()
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
         }
-        AgentMonitorService.start(this)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
