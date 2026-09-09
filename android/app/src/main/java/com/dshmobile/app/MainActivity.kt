@@ -66,6 +66,13 @@ class MainActivity : Activity() {
     private var sshKeyPathInput: EditText? = null
     private var disconnectButton: Button? = null
 
+    // Step3 连接进度行（引导流程；null = 界面未构造/非引导状态）
+    private var stepGuideLine1: TextView? = null
+    private var stepGuideLine2: TextView? = null
+    private var stepGuideLine3: TextView? = null
+    private var stepGuideCard: View? = null
+    private var stepGuideStep2: View? = null
+
     /** 连接进行中守卫：防连点「连接」并发多个隧道/多次设置回调。 */
     private val connecting = AtomicBoolean(false)
 
@@ -205,7 +212,10 @@ class MainActivity : Activity() {
                     // 只对 http(s) 正式页面置 ack：about:blank 等内部加载不能污染状态
                     //（1.5.2 断开连接加载 about:blank 会把 ack 误置 true → 省掉 token 交换 → 401）。
                     val u = webView?.url
-                    if (u?.startsWith("http") == true && !u.contains("?token=")) sshTokenAck = true
+                    if (u?.startsWith("http") == true && !u.contains("?token=")) {
+                        sshTokenAck = true
+                        guideLineDone(3, "③ 打开 dsh 网页 ✓ 已打开")
+                    }
                     hideErrorPage()
                 }
                 override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
@@ -488,7 +498,35 @@ class MainActivity : Activity() {
         })
         card.addView(headerRow, rowParams(top = dp(2), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // ── 使用方法（SSH Web / SSH 终端）：页面主决策，主按钮跟随 ──
+        // ── 三步连接引导：选模式 → 填连接信息 → 连接中 ──────────────────
+        // 关键字段引用保留为类字段（连接流程/状态钩子复用）
+        var step1Card: LinearLayout? = null   // 选模式
+        var step2Card: LinearLayout? = null   // 填信息
+        var step3Card: LinearLayout? = null   // 连接中
+        var connectMainBtn: Button? = null    // 底部主按钮（每步复用）
+        var webMode = true
+        val savedSsh = prefs.getString("ssh_json", null)?.let {
+            try { JSONObject(it) } catch (_: Exception) { null }
+        }
+
+        // 步骤容器（后续在 card 内按顺序 addView）
+        fun stepLabel(text: String): TextView = TextView(this@MainActivity).apply {
+            this.text = text
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COL_TITLE)
+        }
+        fun stepHint(text: String): TextView = TextView(this@MainActivity).apply {
+            this.text = text
+            textSize = 11f
+            setTextColor(COL_MUTED)
+        }
+
+        // ── Step 1：你想做什么 ─────────────────────────────────────────
+        step1Card = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        step1Card!!.addView(stepLabel("你想做什么？"), rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+        step1Card!!.addView(stepHint("手机连上你电脑上的 DeepSeek Harness。"), rowParams(top = dp(2), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
         fun modeCard(text: String, sub: String): Pair<LinearLayout, (Boolean) -> Unit> {
             val title = TextView(this@MainActivity).apply {
                 this.text = text
@@ -524,17 +562,12 @@ class MainActivity : Activity() {
             }
             return card to paint
         }
-
-        val (webModeCard, paintWeb) = modeCard("SSH Web", "访问 dsh 网页界面")
-        val (termModeCard, paintTerm) = modeCard("SSH 终端", "远程 shell")
-        // 主按钮初始态：跟随默认模式（SSH Web）；后续模式切换由 selectMode 更新
-        var webMode = true
-        var connectMainBtn: Button? = null
+        val (webModeCard, paintWeb) = modeCard("看 dsh 网页", "浏览会话、聊天")
+        val (termModeCard, paintTerm) = modeCard("打开终端", "远程敲命令")
         fun selectMode(web: Boolean) {
             webMode = web
             paintWeb(web)
             paintTerm(!web)
-            connectMainBtn?.text = if (web) "连接 · SSH Web" else "打开 · SSH 终端"
         }
         webModeCard.setOnClickListener { selectMode(true) }
         termModeCard.setOnClickListener { selectMode(false) }
@@ -543,47 +576,59 @@ class MainActivity : Activity() {
             addView(webModeCard, LinearLayout.LayoutParams(0, dp(64), 1f).apply { marginEnd = dp(6) })
             addView(termModeCard, LinearLayout.LayoutParams(0, dp(64), 1f).apply { marginStart = dp(6) })
         }
-        card.addView(modeRow, rowParams(top = dp(16), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        paintWeb(true); paintTerm(false)
+        step1Card!!.addView(modeRow, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        selectMode(true)
+        // 小字：避免选择负担
+        step1Card!!.addView(stepHint("· 看 dsh 网页：管理和浏览电脑上的 dsh 界面\n· 打开终端：远程敲命令，像在电脑前一样"),
+            rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        step1Card!!.addView(Button(this@MainActivity).apply {
+            text = "下一步"
+            isAllCaps = false
+            setTextColor(COL_ACCENT_TEXT)
+            setBackgroundResource(R.drawable.bg_button_primary)
+            setOnClickListener { step2Card?.visibility = View.VISIBLE; step1Card?.visibility = View.GONE }
+        }, rowParams(top = dp(12), height = dp(46), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        val sshSection = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        // ── Step 2：连接信息 ───────────────────────────────────────────
+        step2Card = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        step2Card!!.addView(stepLabel("连接信息"), rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+        step2Card!!.addView(stepHint("你电脑上运行 dsh 的地址和登录账号。"),
+            rowParams(top = dp(2), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // ── SSH 连接参数（公共）──────────────────────────────
-        // 直连模式已移除：两种使用方法都经 SSH 隧道。
-        val savedSsh = prefs.getString("ssh_json", null)?.let {
-            try { JSONObject(it) } catch (_: Exception) { null }
-        }
-
-        sshSection.addView(label("SSH 主机"), rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        val sshHostInput = input("主机", savedSsh?.optString("sshHost") ?: "")
-        val sshPortInput = input("端口", savedSsh?.optString("sshPort") ?: "22", number = true)
+        step2Card!!.addView(label("电脑地址"), rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        val sshHostInput = input("IP 地址", savedSsh?.optString("sshHost") ?: "")
+        val sshPortInput = input("22", savedSsh?.optString("sshPort") ?: "22", number = true)
         val sshHostRow = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(sshHostInput, LinearLayout.LayoutParams(0, dp(42), 3f).apply { marginEnd = dp(8) })
             addView(sshPortInput, LinearLayout.LayoutParams(0, dp(42), 1f))
         }
-        sshSection.addView(sshHostRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        step2Card!!.addView(sshHostRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        step2Card!!.addView(stepHint("端口一般用 22，不用改。"), rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        sshSection.addView(label("用户名 / 目标端口"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        step2Card!!.addView(label("登录账号"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
         val sshUserInput = input("用户名", savedSsh?.optString("sshUser") ?: "")
+        step2Card!!.addView(sshUserInput, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        step2Card!!.addView(label("电脑登录密码"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        val sshPassInput = input("密码", savedSsh?.optString("password") ?: "", pwd = true)
+        val passRow = pwdRow(sshPassInput)
+        step2Card!!.addView(passRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // 高级设置（折叠）：dsh 端口 + 私钥登录
+        val privateKeySection = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+
+        privateKeySection.addView(label("dsh 端口"), rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
         val sshTargetPortInput = input(
             "3080",
             (savedSsh?.optInt("remotePort", DEFAULT_PORT.toInt()) ?: DEFAULT_PORT.toInt()).toString(),
             number = true
         )
-        val sshUserRow = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(sshUserInput, LinearLayout.LayoutParams(0, dp(42), 2f).apply { marginEnd = dp(8) })
-            addView(sshTargetPortInput, LinearLayout.LayoutParams(0, dp(42), 1f))
-        }
-        sshSection.addView(sshUserRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        sshSection.addView(TextView(this@MainActivity).apply {
-            text = "目标端口 = 服务端 dsh web 端口（隧道从本机映射过去）"
-            textSize = 10f
-            setTextColor(COL_DIM)
-        }, rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        privateKeySection.addView(sshTargetPortInput, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        privateKeySection.addView(stepHint("dsh 网页的端口，默认 3080，一般不用改。"),
+            rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        sshSection.addView(label("认证方式"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        privateKeySection.addView(label("登录方式"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
         val authPassBtn = segment("密码", true)
         val authKeyBtn = segment("私钥", false)
         val authGroup = RadioGroup(this@MainActivity).apply {
@@ -591,11 +636,7 @@ class MainActivity : Activity() {
             addView(authPassBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(6) })
             addView(authKeyBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginStart = dp(6) })
         }
-        sshSection.addView(authGroup, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        val sshPassInput = input("SSH 密码", savedSsh?.optString("password") ?: "", pwd = true)
-        val passRow = pwdRow(sshPassInput)
-        sshSection.addView(passRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        privateKeySection.addView(authGroup, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         val keyPathInput = input("私钥路径（可导入）", savedSsh?.optString("keyPath") ?: "")
         keyPathInput.isFocusable = true
@@ -613,21 +654,13 @@ class MainActivity : Activity() {
             addView(keyPathInput, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
             addView(browseKeyBtn, LinearLayout.LayoutParams(dp(56), dp(42)))
         }
-        sshSection.addView(keyPathRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        privateKeySection.addView(keyPathRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         val keyPassInput = input("私钥口令（可选）", savedSsh?.optString("keyPass") ?: "", pwd = true)
         val keyPassRow = pwdRow(keyPassInput)
-        sshSection.addView(keyPassRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        privateKeySection.addView(keyPassRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        sshSection.addView(TextView(this@MainActivity).apply {
-            text = "令牌：由应用自动从服务端日志获取，无需手填。"
-            textSize = 10f
-            setTextColor(COL_DIM)
-        }, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        card.addView(sshSection, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // 认证方式控制密码/私钥字段显隐
+        // 认证方式切换：密码 / 私钥字段显隐
         val savedAuthType = savedSsh?.optString("authType", "password") ?: "password"
         if (savedAuthType == "key") authKeyBtn.isChecked = true
         fun syncAuthFields() {
@@ -639,8 +672,120 @@ class MainActivity : Activity() {
         authGroup.setOnCheckedChangeListener { _, _ -> syncAuthFields() }
         syncAuthFields()
 
+        // 高级设置折叠开关
+        val advancedWrap = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        val advancedToggle = Button(this@MainActivity).apply {
+            text = "高级设置 ▾"
+            isAllCaps = false
+            textSize = 12f
+            setTextColor(COL_DIM)
+            setBackgroundResource(R.drawable.bg_button_secondary)
+            setOnClickListener {
+                val hidden = privateKeySection.visibility == View.GONE
+                privateKeySection.visibility = if (hidden) View.VISIBLE else View.GONE
+                this.text = if (hidden) "高级设置 ▴" else "高级设置 ▾"
+            }
+        }
+        advancedWrap.addView(advancedToggle, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(36)))
+        advancedWrap.addView(privateKeySection.apply { visibility = View.GONE },
+            rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        step2Card!!.addView(advancedWrap, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // Step 2 底部：上一步 + 主按钮（文案跟模式）
+        val step2Nav = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+        step2Nav.addView(Button(this@MainActivity).apply {
+            text = "上一步"
+            isAllCaps = false
+            textSize = 12f
+            setTextColor(COL_TEXT)
+            setBackgroundResource(R.drawable.bg_button_secondary)
+            setOnClickListener { step1Card?.visibility = View.VISIBLE; step2Card?.visibility = View.GONE }
+        }, LinearLayout.LayoutParams(dp(88), dp(46)).apply { marginEnd = dp(6) })
+        connectMainBtn = Button(this@MainActivity).apply {
+            isAllCaps = false
+            setTextColor(COL_ACCENT_TEXT)
+            setBackgroundResource(R.drawable.bg_button_primary)
+            setOnClickListener {
+                prefs.edit().putBoolean(PREF_SSH_ENABLED, true).apply()
+                sshTokenAck = false
+
+                // 校验
+                val sh = sshHostInput.text.toString().trim()
+                val su = sshUserInput.text.toString().trim()
+                val sport = sshPortInput.text.toString().trim().toIntOrNull()?.coerceIn(1, 65535) ?: 22
+                val target = sshTargetPortInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
+                    .toIntOrNull()?.coerceIn(1, 65535) ?: 3080
+                if (sh.isBlank() || su.isBlank()) { status("请填写电脑地址和登录账号", true); guideBackToStep2(); return@setOnClickListener }
+                val auth = if (authKeyBtn.isChecked) {
+                    val path = keyPathInput.text.toString().trim()
+                    if (path.isBlank()) { status("请选择 SSH 私钥", true); guideBackToStep2(); return@setOnClickListener }
+                    SshTunnel.Auth.KeyPair(File(path), keyPassInput.text.toString().ifEmpty { null })
+                } else {
+                    if (sshPassInput.text.toString().isEmpty()) { status("请填写电脑登录密码", true); guideBackToStep2(); return@setOnClickListener }
+                    SshTunnel.Auth.Password(sshPassInput.text.toString())
+                }
+                if (!webMode) {
+                    persistSshConfig(sh, sport, su, target, auth)
+                    startActivity(Intent(this@MainActivity, TuiActivity::class.java))
+                    return@setOnClickListener
+                }
+                if (!beginConnect()) { guideBackToStep2(); return@setOnClickListener }
+                stepGuideLine1?.text = "① 检查电脑 正在连接"
+                connectViaSsh(sh, sport, su, target, auth)
+            }
+        }
+        step2Nav.addView(connectMainBtn!!, LinearLayout.LayoutParams(0, dp(46), 1f))
+        step2Card!!.addView(step2Nav, rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // ── Step 3：连接中 ─────────────────────────────────────────────
+        // 行内容由类级 guideLine* 更新（connectViaSsh/autoConnectSsh/onPageFinished 共用）
+        val line1 = TextView(this@MainActivity).apply {
+            textSize = 13f
+            text = "① 检查电脑 等待连接…"
+            setTextColor(COL_MUTED)
+            setIncludeFontPadding(false)
+        }
+        val line2 = TextView(this@MainActivity).apply {
+            textSize = 13f
+            text = "② 建立安全通道"
+            setTextColor(COL_MUTED)
+            setIncludeFontPadding(false)
+        }
+        val line3 = TextView(this@MainActivity).apply {
+            textSize = 13f
+            text = "③ 打开 dsh 网页"
+            setTextColor(COL_MUTED)
+            setIncludeFontPadding(false)
+        }
+        stepGuideLine1 = line1
+        stepGuideLine2 = line2
+        stepGuideLine3 = line3
+
+        step3Card = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        step3Card!!.addView(stepLabel("连接中…"), rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+        step3Card!!.addView(line1, rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        step3Card!!.addView(line2, rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        step3Card!!.addView(line3, rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        step3Card!!.addView(Button(this@MainActivity).apply {
+            text = "返回修改"
+            isAllCaps = false
+            textSize = 12f
+            setTextColor(COL_TEXT)
+            setBackgroundResource(R.drawable.bg_button_secondary)
+            setOnClickListener { guideBackToStep2() }
+        }, rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        stepGuideCard = step3Card
+        stepGuideStep2 = step2Card
+
+        // ── 组装：header → step1 → step2 → step3 ──────────────────────
+        card.addView(step1Card, rowParams(top = dp(16), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        card.addView(step2Card!!.apply { visibility = View.GONE }, rowParams(top = dp(16), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        card.addView(step3Card!!.apply { visibility = View.GONE }, rowParams(top = dp(16), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
         card.addView(spacer(dp(10)))
 
+        // 状态条（全局错误/连接进度；Step3 行内也有状态）
         statusView = TextView(this@MainActivity).apply {
             textSize = 12f
             setTextColor(COL_MUTED)
@@ -650,51 +795,9 @@ class MainActivity : Activity() {
             setPadding(dp(14), dp(4), dp(14), dp(4))
             visibility = View.GONE
         }
+        card.addView(statusView, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // SSH Web：连接（自动获取令牌）；SSH 终端：仅校验即打开 —— 主按钮跟随模式
-        connectMainBtn = Button(this@MainActivity).apply {
-            isAllCaps = false
-            text = "连接 · SSH Web"
-            setTextColor(COL_ACCENT_TEXT)
-            setBackgroundResource(R.drawable.bg_button_primary)
-            setOnClickListener {
-                prefs.edit().putBoolean(PREF_SSH_ENABLED, true).apply()
-                // 手动重新连接 = 重新走一次认证（token 可能已更新）
-                sshTokenAck = false
-
-                // 先完成全部校验，再进入连接守卫（校验失败不阻塞后续状态）
-                val sh = sshHostInput.text.toString().trim()
-                val su = sshUserInput.text.toString().trim()
-                val sport = sshPortInput.text.toString().trim().toIntOrNull()?.coerceIn(1, 65535) ?: 22
-                val target = sshTargetPortInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
-                    .toIntOrNull()?.coerceIn(1, 65535) ?: 3080
-                if (sh.isBlank() || su.isBlank()) { status("SSH 主机/用户名不能为空", true); return@setOnClickListener }
-                val auth = if (authKeyBtn.isChecked) {
-                    val path = keyPathInput.text.toString().trim()
-                    if (path.isBlank()) { status("请选择 SSH 私钥", true); return@setOnClickListener }
-                    SshTunnel.Auth.KeyPair(File(path), keyPassInput.text.toString().ifEmpty { null })
-                } else {
-                    if (sshPassInput.text.toString().isEmpty()) { status("请填写 SSH 密码", true); return@setOnClickListener }
-                    SshTunnel.Auth.Password(sshPassInput.text.toString())
-                }
-                if (!webMode) {
-                    // 终端模式：校验通过即持久化并直接打开（不要求 WebView 先连接成功）
-                    persistSshConfig(sh, sport, su, target, auth)
-                    startActivity(Intent(this@MainActivity, TuiActivity::class.java))
-                    return@setOnClickListener
-                }
-                if (!beginConnect()) return@setOnClickListener
-                connectViaSsh(sh, sport, su, target, auth)
-            }
-        }
-        card.addView(connectMainBtn, rowParams(top = dp(12), height = dp(46), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // 状态行 + 断开连接（次级；断开仅在隧道运行时显示）
-        val statusRow = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        statusRow.addView(statusView, LinearLayout.LayoutParams(0, dp(28), 1f).apply { marginEnd = dp(6) })
+        // 断开连接（仅隧道运行时显示）
         disconnectButton = Button(this@MainActivity).apply {
             text = "断开连接"
             isAllCaps = false
@@ -703,10 +806,10 @@ class MainActivity : Activity() {
             setBackgroundResource(R.drawable.bg_button_secondary)
             setOnClickListener { disconnectCurrent() }
         }
-        statusRow.addView(disconnectButton!!, LinearLayout.LayoutParams(dp(84), dp(28)))
-        card.addView(statusRow, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        card.addView(disconnectButton!!, rowParams(top = dp(10), height = dp(36), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        disconnectButton!!.visibility = View.GONE
 
-        // 上次连接摘要（单行）
+        // 上次连接摘要（单行，非空时显示）
         savedSsh?.takeIf { it.optString("sshHost").isNotBlank() }?.let {
             card.addView(TextView(this@MainActivity).apply {
                 text = "上次连接: ${it.optString("sshUser")}@${it.optString("sshHost")}:${it.optInt("sshPort", 22)}" +
@@ -836,6 +939,7 @@ class MainActivity : Activity() {
     // ── SSH 隧道（纯 WebView 用）─────────────────────────────
     private fun connectViaSsh(sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, auth: SshTunnel.Auth) {
         status("SSH 隧道建立中… $sshUser@$sshHost")
+        guideStep3Show()
         val app = application as DshApp
         Thread {
             // 旧隧道先关（重复连接/模式切换的泄漏点）
@@ -860,13 +964,18 @@ class MainActivity : Activity() {
                 tunnel.close()
                 runOnUiThread {
                     status("隧道建立失败（检查 SSH 主机/端口/用户/认证）")
+                    guideLineFail(1, "① 检查电脑 ✗ 连不上你的电脑（检查地址/账号/密码）")
+                    guideLine(2, "② 建立安全通道 未开始", running = true)
                     endConnect()
                 }
                 return@Thread
             }
+            runOnUiThread { guideLineDone(1, "① 检查电脑 ✓ 已连上电脑") }
             // 自动获取最新 token（服务重启后旧 token 失效；失败静默回退）
-            autoFetchToken(tunnel)
+            val token = autoFetchToken(tunnel)
             runOnUiThread {
+                if (token != null) guideLineDone(2, "② 建立安全通道 ✓ 已连通")
+                else guideLineFail(2, "② 建立安全通道 ⚠ 未获取令牌，仍尝试打开")
                 persistSshConfig(sshHost, sshPort, sshUser, remotePort, auth)
                 app.sshTunnel = tunnel
                 sshTokenAck = false
@@ -1164,6 +1273,40 @@ class MainActivity : Activity() {
     }
 
     private fun endConnect() { connecting.set(false) }
+
+    // ── 引导流 Step3 状态（类级：connectViaSsh/autoConnectSsh/onPageFinished 共用）────
+    private fun guideStep3Show() {
+        stepGuideCard?.visibility = View.VISIBLE
+        stepGuideStep2?.visibility = View.GONE
+        guideLine(0, "① 检查电脑 正在连接…", running = true)
+        guideLine(1, "② 建立安全通道", running = true)
+        guideLine(2, "③ 打开 dsh 网页", running = true)
+    }
+    private fun guideLine(index: Int, text: String, running: Boolean = false) {
+        val v = when (index) {
+            0 -> stepGuideLine1; 1 -> stepGuideLine2; else -> stepGuideLine3
+        } ?: return
+        v.text = text
+        v.setTextColor(if (running) COL_MUTED else COL_ACCENT)
+    }
+    private fun guideLineDone(index: Int, text: String) {
+        val v = when (index) {
+            0 -> stepGuideLine1; 1 -> stepGuideLine2; else -> stepGuideLine3
+        } ?: return
+        v.text = text
+        v.setTextColor(COL_ACCENT)
+    }
+    private fun guideLineFail(index: Int, text: String) {
+        val v = when (index) {
+            0 -> stepGuideLine1; 1 -> stepGuideLine2; else -> stepGuideLine3
+        } ?: return
+        v.text = text
+        v.setTextColor(COL_ERROR)
+    }
+    private fun guideBackToStep2() {
+        stepGuideStep2?.visibility = View.VISIBLE
+        stepGuideCard?.visibility = View.GONE
+    }
 
     /** 关闭并释放当前 SSH 隧道（无则 no-op）。 */
     private fun closeCurrentTunnel() {
