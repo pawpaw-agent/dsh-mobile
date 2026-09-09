@@ -22,7 +22,6 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
-import android.widget.Switch
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -475,8 +474,8 @@ class MainActivity : Activity() {
             letterSpacing = 0.12f
         }
 
-        fun input(hint: String, prefill: String = "", pwd: Boolean = false): EditText =
-            EditText(this).apply {
+        fun input(hint: String, prefill: String = "", pwd: Boolean = false, number: Boolean = false): EditText =
+            EditText(this@MainActivity).apply {
                 this.hint = hint
                 textSize = 14f
                 setTextColor(COL_TEXT)
@@ -485,7 +484,13 @@ class MainActivity : Activity() {
                 setPadding(dp(12), dp(10), dp(12), dp(10))
                 setSingleLine(true)
                 setHorizontallyScrolling(true)
-                if (pwd) transformationMethod = android.text.method.PasswordTransformationMethod.getInstance()
+                when {
+                    pwd -> inputType = InputType.TYPE_CLASS_TEXT
+                        or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                        or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                    number -> inputType = InputType.TYPE_CLASS_NUMBER
+                    else -> inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                }
                 if (prefill.isNotEmpty()) setText(prefill)
             }
 
@@ -515,27 +520,72 @@ class MainActivity : Activity() {
                       height: Int = ViewGroup.LayoutParams.WRAP_CONTENT) =
             LinearLayout.LayoutParams(width, height).apply { topMargin = top }
 
-        // Logo + 标题
-        card.addView(ImageView(this).apply {
+        /** 密码行：输入框 + 显示/隐藏切换（避免密码框永远黑点）。 */
+        fun pwdRow(field: EditText): View {
+            val showBtn = Button(this@MainActivity).apply {
+                text = "显示"
+                isAllCaps = false
+                textSize = 12f
+                setTextColor(COL_DIM)
+                setBackgroundResource(R.drawable.bg_button_secondary)
+                setOnClickListener {
+                    val wasMasked = field.transformationMethod != null
+                    field.transformationMethod = if (wasMasked) null
+                        else android.text.method.PasswordTransformationMethod.getInstance()
+                    field.text?.let { field.setSelection(it.length) }
+                    // 刚揭开（现在可见）→ 按钮变「隐藏」；刚遮上 → 变「显示」
+                    this.text = if (wasMasked) "隐藏" else "显示"
+                    setTextColor(if (wasMasked) COL_ACCENT else COL_DIM)
+                }
+            }
+            return LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(field, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
+                addView(showBtn, LinearLayout.LayoutParams(dp(56), dp(42)))
+            }
+        }
+
+        // ── 头部 ──────────────────────────────────────────────
+        val headerRow = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        headerRow.addView(ImageView(this@MainActivity).apply {
             setImageResource(R.drawable.ic_launcher_foreground)
-            layoutParams = LinearLayout.LayoutParams(dp(38), dp(38)).apply { gravity = Gravity.CENTER_HORIZONTAL }
+            layoutParams = LinearLayout.LayoutParams(dp(32), dp(32))
         })
-        card.addView(TextView(this).apply {
-            text = "DSH Mobile"
-            textSize = 21f
-            typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
-            setTextColor(COL_TITLE)
-            gravity = Gravity.CENTER
-        }, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        card.addView(TextView(this).apply {
-            text = "DeepSeek Harness · 手机端"
-            textSize = 11f
-            setTextColor(COL_MUTED)
-            gravity = Gravity.CENTER
-        }, rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        headerRow.addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(this@MainActivity).apply {
+                text = "DSH Mobile"
+                textSize = 18f
+                typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+                setTextColor(COL_TITLE)
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "DeepSeek Harness · 手机端"
+                textSize = 10f
+                setTextColor(COL_MUTED)
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(1) })
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            marginStart = dp(10)
+        })
+        card.addView(headerRow, rowParams(top = dp(2), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        card.addView(label("服务器地址"), rowParams(top = dp(16)))
+        // ── 模式选择：直接连接 / SSH 隧道 ──────────────────────
+        val sshMode = prefs.getBoolean(PREF_SSH_ENABLED, false)
+        val directBtn = segment("直接连接", !sshMode)
+        val sshBtn = segment("SSH 隧道", sshMode)
+        val modeGroup = RadioGroup(this@MainActivity).apply {
+            orientation = RadioGroup.HORIZONTAL
+            addView(directBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
+            addView(sshBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(6) })
+        }
+        card.addView(modeGroup, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
+        // ── 直连区 ────────────────────────────────────────────
         // 协议分段：优先使用独立保存的服务器信息，避免被 SSH 随机本地端口覆盖
         val savedUrl = prefs.getString("url", null)
         val savedSshForServer = prefs.getString("ssh_json", null)?.let {
@@ -558,120 +608,157 @@ class MainActivity : Activity() {
                 prefillPort = (savedSshForServer?.optInt("remotePort", DEFAULT_PORT.toInt()) ?: DEFAULT_PORT.toInt()).toString()
             }
         }
+
+        val directSection = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        directSection.addView(label("网页地址"), rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
         val httpBtn = segment("http", prefillProto != "https")
         val httpsBtn = segment("https", prefillProto == "https")
-        val protocolGroup = RadioGroup(this).apply {
+        val protocolGroup = RadioGroup(this@MainActivity).apply {
             orientation = RadioGroup.HORIZONTAL
-            addView(httpBtn, LinearLayout.LayoutParams(0, dp(38), 1f).apply { marginEnd = dp(6) })
-            addView(httpsBtn, LinearLayout.LayoutParams(0, dp(38), 1f).apply { marginStart = dp(6) })
+            addView(httpBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(6) })
+            addView(httpsBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginStart = dp(6) })
         }
-        card.addView(protocolGroup, rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        directSection.addView(protocolGroup, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        val hostInput = EditText(this).apply {
-            hint = "服务器 IP / 域名"
+        val hostInput = EditText(this@MainActivity).apply {
+            hint = "IP / 域名"
             textSize = 14f
             setText(prefillHost)
             setTextColor(COL_TEXT); setHintTextColor(COL_HINT)
             setBackgroundResource(R.drawable.bg_input)
             setPadding(dp(12), dp(11), dp(12), dp(11)); setSingleLine(true)
             setHorizontallyScrolling(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         }
-        val portInput = EditText(this).apply {
+        val portInput = EditText(this@MainActivity).apply {
             hint = "端口"; textSize = 14f; setText(prefillPort)
             setTextColor(COL_TEXT); setHintTextColor(COL_HINT)
             setBackgroundResource(R.drawable.bg_input)
             setPadding(dp(12), dp(11), dp(12), dp(11)); setSingleLine(true)
             setHorizontallyScrolling(true)
+            inputType = InputType.TYPE_CLASS_NUMBER
         }
-        val serverRow = LinearLayout(this).apply {
+        val serverRow = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(hostInput, LinearLayout.LayoutParams(0, dp(42), 3f).apply { marginEnd = dp(8) })
             addView(portInput, LinearLayout.LayoutParams(0, dp(42), 1f))
         }
-        card.addView(serverRow, rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        directSection.addView(serverRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // dsh 0.1.2+ 一次性启动 token（浏览器认证）：首次加载 ?token= 换取
-        // cookie 后常驻；服务重启 token 变化，需要从 dsh web 启动日志更新。
-        val tokenInput = input("访问令牌（dsh 0.1.2+ 首次登录需要）", prefs.getString(PREF_SERVER_TOKEN, "").orEmpty())
-        tokenInput.setHorizontallyScrolling(true)
-        card.addView(tokenInput, rowParams(top = dp(8), height = dp(42), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        directSection.addView(label("访问令牌"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        val tokenInput = input("令牌（dsh 0.1.2+ 浏览器认证）", prefs.getString(PREF_SERVER_TOKEN, "").orEmpty())
+        directSection.addView(tokenInput, rowParams(top = dp(6), height = dp(42), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        directSection.addView(TextView(this@MainActivity).apply {
+            text = "服务重启后令牌会变化；直连需服务端开放该端口。"
+            textSize = 10f
+            setTextColor(COL_DIM)
+        }, rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        card.addView(directSection, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // SSH 隧道
+        // ── SSH 区 ────────────────────────────────────────────
         val savedSsh = prefs.getString("ssh_json", null)?.let {
             try { JSONObject(it) } catch (_: Exception) { null }
         }
-        card.addView(label("SSH 隧道"), rowParams(top = dp(14)))
-        val sshToggle = Switch(this).apply {
-            text = "启用 SSH"
-            setTextColor(COL_TEXT)
-            thumbTintList = ColorStateList.valueOf(COL_ACCENT)
-            trackTintList = ColorStateList.valueOf(0x22FFFFFF.toInt())
-            isChecked = prefs.getBoolean(PREF_SSH_ENABLED, false)
+        val sshSection = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+
+        sshSection.addView(label("SSH 主机"), rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        val sshHostInput = input("主机", savedSsh?.optString("sshHost") ?: "")
+        val sshPortInput = input("端口", savedSsh?.optString("sshPort") ?: "22", number = true)
+        val sshHostRow = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(sshHostInput, LinearLayout.LayoutParams(0, dp(42), 3f).apply { marginEnd = dp(8) })
+            addView(sshPortInput, LinearLayout.LayoutParams(0, dp(42), 1f))
         }
-        card.addView(sshToggle, rowParams(top = dp(6)))
+        sshSection.addView(sshHostRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        val sshHostInput = input("SSH 主机", savedSsh?.optString("sshHost") ?: "")
-        val sshPortInput = input("SSH 端口", savedSsh?.optString("sshPort") ?: "22")
+        sshSection.addView(label("用户名 / 目标端口"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
         val sshUserInput = input("用户名", savedSsh?.optString("sshUser") ?: "")
-        val sshPassInput = input("SSH 密码", savedSsh?.optString("password") ?: "", pwd = true)
+        val sshTargetPortInput = input(
+            "3080",
+            (savedSsh?.optInt("remotePort", DEFAULT_PORT.toInt()) ?: DEFAULT_PORT.toInt()).toString(),
+            number = true
+        )
+        val sshUserRow = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(sshUserInput, LinearLayout.LayoutParams(0, dp(42), 2f).apply { marginEnd = dp(8) })
+            addView(sshTargetPortInput, LinearLayout.LayoutParams(0, dp(42), 1f))
+        }
+        sshSection.addView(sshUserRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        sshSection.addView(TextView(this@MainActivity).apply {
+            text = "目标端口 = 服务端 dsh web 端口（隧道从本机映射过去）"
+            textSize = 10f
+            setTextColor(COL_DIM)
+        }, rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // 认证方式：密码 / 私钥
+        sshSection.addView(label("认证方式"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
         val authPassBtn = segment("密码", true)
         val authKeyBtn = segment("私钥", false)
-        val authGroup = RadioGroup(this).apply {
+        val authGroup = RadioGroup(this@MainActivity).apply {
             orientation = RadioGroup.HORIZONTAL
             addView(authPassBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(6) })
             addView(authKeyBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginStart = dp(6) })
         }
+        sshSection.addView(authGroup, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        val sshPassInput = input("SSH 密码", savedSsh?.optString("password") ?: "", pwd = true)
+        val passRow = pwdRow(sshPassInput)
+        sshSection.addView(passRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
         val keyPathInput = input("私钥路径（可导入）", savedSsh?.optString("keyPath") ?: "")
         keyPathInput.isFocusable = true
         sshKeyPathInput = keyPathInput
-        val keyPassInput = input("私钥口令（可选）", savedSsh?.optString("keyPass") ?: "", pwd = true)
-        val browseKeyBtn = Button(this).apply {
-            text = "浏览导入私钥…"
+        val browseKeyBtn = Button(this@MainActivity).apply {
+            text = "导入"
             isAllCaps = false
+            textSize = 12f
             setTextColor(COL_TEXT)
             setBackgroundResource(R.drawable.bg_button_secondary)
             setOnClickListener { pickSshKey() }
         }
-
-        val sshFields = listOf(sshHostInput, sshPortInput, sshUserInput, sshPassInput,
-            authGroup, keyPathInput, keyPassInput, browseKeyBtn)
-        sshFields.forEach {
-            it.visibility = View.GONE
-            card.addView(it, rowParams(
-                top = dp(6), height = dp(40), width = ViewGroup.LayoutParams.MATCH_PARENT
-            ))
+        val keyPathRow = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(keyPathInput, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
+            addView(browseKeyBtn, LinearLayout.LayoutParams(dp(56), dp(42)))
         }
+        sshSection.addView(keyPathRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // 关键：认证方式控制密码/私钥字段显隐
+        val keyPassInput = input("私钥口令（可选）", savedSsh?.optString("keyPass") ?: "", pwd = true)
+        val keyPassRow = pwdRow(keyPassInput)
+        sshSection.addView(keyPassRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        sshSection.addView(TextView(this@MainActivity).apply {
+            text = "令牌：SSH 模式下由应用自动从服务端日志获取，无需手填。"
+            textSize = 10f
+            setTextColor(COL_DIM)
+        }, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        card.addView(sshSection, rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // 认证方式控制密码/私钥字段显隐
         val savedAuthType = savedSsh?.optString("authType", "password") ?: "password"
-        if (savedAuthType == "key") authKeyBtn.isChecked = true else authPassBtn.isChecked = true
+        if (savedAuthType == "key") authKeyBtn.isChecked = true
         fun syncAuthFields() {
             val key = authKeyBtn.isChecked
-            keyPathInput.visibility = if (key) View.VISIBLE else View.GONE
-            keyPassInput.visibility = if (key) View.VISIBLE else View.GONE
-            browseKeyBtn.visibility = if (key) View.VISIBLE else View.GONE
-            sshPassInput.visibility = if (key) View.GONE else if (sshToggle.isChecked) View.VISIBLE else View.GONE
+            keyPathRow.visibility = if (key) View.VISIBLE else View.GONE
+            keyPassRow.visibility = if (key) View.VISIBLE else View.GONE
+            passRow.visibility = if (key) View.GONE else View.VISIBLE
         }
         authGroup.setOnCheckedChangeListener { _, _ -> syncAuthFields() }
 
-        fun syncSshVisibility() {
-            val on = sshToggle.isChecked
-            listOf(sshHostInput, sshPortInput, sshUserInput, authGroup).forEach { it.visibility = if (on) View.VISIBLE else View.GONE }
-            if (on) {
-                syncAuthFields()
-            } else {
-                listOf(keyPathInput, keyPassInput, browseKeyBtn).forEach { it.visibility = View.GONE }
-            }
+        // 模式切换：只显示当前模式的分区（直连区/SSH 区互斥）
+        fun syncMode() {
+            val ssh = sshBtn.isChecked
+            directSection.visibility = if (ssh) View.GONE else View.VISIBLE
+            sshSection.visibility = if (ssh) View.VISIBLE else View.GONE
+            if (ssh) syncAuthFields()
         }
-        sshToggle.setOnCheckedChangeListener { _, _ -> syncSshVisibility() }
+        modeGroup.setOnCheckedChangeListener { _, _ -> syncMode() }
         syncAuthFields()
-        syncSshVisibility()
+        syncMode()
 
         card.addView(spacer(dp(10)))
 
-        statusView = TextView(this).apply {
+        statusView = TextView(this@MainActivity).apply {
             textSize = 12f
             setTextColor(COL_MUTED)
             gravity = Gravity.CENTER
@@ -682,64 +769,64 @@ class MainActivity : Activity() {
         }
         card.addView(statusView, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        card.addView(Button(this).apply {
+        card.addView(Button(this@MainActivity).apply {
             text = "连接"
             isAllCaps = false
             setTextColor(COL_ACCENT_TEXT)
             setBackgroundResource(R.drawable.bg_button_primary)
             setOnClickListener {
-                val useSsh = sshToggle.isChecked
+                val useSsh = sshBtn.isChecked
                 prefs.edit().putBoolean(PREF_SSH_ENABLED, useSsh).apply()
-                prefs.edit().putString(PREF_SERVER_TOKEN, tokenInput.text.toString().trim()).apply()
                 // 手动重新连接 = 重新走一次认证（token 可能已更新）
                 sshTokenAck = false
 
-                val remotePort = portInput.text.toString().trim().ifEmpty { DEFAULT_PORT }.toIntOrNull() ?: 3080
                 // 先完成全部校验，再进入连接守卫（校验失败不阻塞后续状态）
                 if (useSsh) {
                     val sh = sshHostInput.text.toString().trim()
                     val su = sshUserInput.text.toString().trim()
-                    val sport = sshPortInput.text.toString().trim().toIntOrNull() ?: 22
-                    if (sh.isBlank() || su.isBlank()) { status("SSH 主机/用户名不能为空"); return@setOnClickListener }
+                    val sport = sshPortInput.text.toString().trim().toIntOrNull()?.coerceIn(1, 65535) ?: 22
+                    val target = sshTargetPortInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
+                        .toIntOrNull()?.coerceIn(1, 65535) ?: 3080
+                    if (sh.isBlank() || su.isBlank()) { status("SSH 主机/用户名不能为空", true); return@setOnClickListener }
                     val auth = if (authKeyBtn.isChecked) {
                         val path = keyPathInput.text.toString().trim()
-                        if (path.isBlank()) { status("请选择 SSH 私钥"); return@setOnClickListener }
+                        if (path.isBlank()) { status("请选择 SSH 私钥", true); return@setOnClickListener }
                         SshTunnel.Auth.KeyPair(File(path), keyPassInput.text.toString().ifEmpty { null })
                     } else {
-                        if (sshPassInput.text.toString().isEmpty()) { status("请填写 SSH 密码"); return@setOnClickListener }
+                        if (sshPassInput.text.toString().isEmpty()) { status("请填写 SSH 密码", true); return@setOnClickListener }
                         SshTunnel.Auth.Password(sshPassInput.text.toString())
                     }
                     if (!beginConnect()) return@setOnClickListener
-                    connectViaSsh(sh, sport, su, remotePort, auth)
+                    connectViaSsh(sh, sport, su, target, auth)
                 } else {
                     val host = hostInput.text.toString().trim()
-                    if (host.isBlank()) { status("host 不能为空"); return@setOnClickListener }
+                    if (host.isBlank()) { status("网页地址不能为空", true); return@setOnClickListener }
                     val proto = if (protocolGroup.checkedRadioButtonId == httpsBtn.id) "https" else "http"
+                    val port = portInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
+                        .toIntOrNull()?.coerceIn(1, 65535) ?: DEFAULT_PORT.toInt()
                     prefs.edit()
+                        .putString(PREF_SERVER_TOKEN, tokenInput.text.toString().trim())
                         .putString(PREF_SERVER_PROTO, proto)
                         .putString(PREF_SERVER_HOST, host)
-                        .putString(PREF_SERVER_PORT, remotePort.toString())
+                        .putString(PREF_SERVER_PORT, port.toString())
                         .apply()
                     if (!beginConnect()) return@setOnClickListener
                     // 直连模式不需要隧道：关掉 SSH 遗留隧道（模式切换防泄漏）
                     closeCurrentTunnel()
-                    connectWeb("$proto://$host:$remotePort")
+                    connectWeb("$proto://$host:$port")
                     endConnect()
                 }
             }
-        }, rowParams(top = dp(12), height = dp(44), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        }, rowParams(top = dp(12), height = dp(46), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        card.addView(TextView(this).apply {
-            text = "网页=桌面级 · SSH=解锁本机配置"
-            textSize = 10f
-            setTextColor(COL_DIM)
-            gravity = Gravity.CENTER
-        }, rowParams(top = dp(8)))
-
-        // SSH 终端模式：经 SSH 打开远程 shell（终端 UI，终端内可运行 dsh-tui 等）
-        card.addView(Button(this).apply {
-            text = "→ SSH 终端（远程 shell）"
+        // 次操作行：SSH 终端 + 断开连接（断开仅在隧道运行时显示）
+        val secondaryRow = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        secondaryRow.addView(Button(this@MainActivity).apply {
+            text = "SSH 终端（远程 shell）"
             isAllCaps = false
+            textSize = 12f
             setTextColor(COL_TEXT)
             setBackgroundResource(R.drawable.bg_button_secondary)
             setOnClickListener {
@@ -747,31 +834,53 @@ class MainActivity : Activity() {
                 // 校验通过即持久化，TuiActivity 从 ssh_json 读取。
                 val sh = sshHostInput.text.toString().trim()
                 val su = sshUserInput.text.toString().trim()
-                val sport = sshPortInput.text.toString().trim().toIntOrNull() ?: 22
-                if (sh.isBlank() || su.isBlank()) { status("请先填写 SSH 主机/用户名"); return@setOnClickListener }
+                val sport = sshPortInput.text.toString().trim().toIntOrNull()?.coerceIn(1, 65535) ?: 22
+                if (sh.isBlank() || su.isBlank()) { status("请先填写 SSH 主机/用户名", true); return@setOnClickListener }
                 val auth = if (authKeyBtn.isChecked) {
                     val path = keyPathInput.text.toString().trim()
-                    if (path.isBlank()) { status("请选择 SSH 私钥"); return@setOnClickListener }
+                    if (path.isBlank()) { status("请选择 SSH 私钥", true); return@setOnClickListener }
                     SshTunnel.Auth.KeyPair(File(path), keyPassInput.text.toString().ifEmpty { null })
                 } else {
-                    if (sshPassInput.text.toString().isEmpty()) { status("请填写 SSH 密码"); return@setOnClickListener }
+                    if (sshPassInput.text.toString().isEmpty()) { status("请填写 SSH 密码", true); return@setOnClickListener }
                     SshTunnel.Auth.Password(sshPassInput.text.toString())
                 }
-                val remotePort = portInput.text.toString().trim().ifEmpty { DEFAULT_PORT }.toIntOrNull() ?: 3080
-                persistSshConfig(sh, sport, su, remotePort, auth)
+                val target = sshTargetPortInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
+                    .toIntOrNull()?.coerceIn(1, 65535) ?: 3080
+                persistSshConfig(sh, sport, su, target, auth)
                 startActivity(Intent(this@MainActivity, TuiActivity::class.java))
             }
-        }, rowParams(top = dp(10), height = dp(44), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // 断开连接：停止 SSH 隧道并回到连接屏（直连模式仅回连接屏）
-        disconnectButton = Button(this).apply {
-            text = "断开连接（停止隧道）"
+        }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) })
+        disconnectButton = Button(this@MainActivity).apply {
+            text = "断开连接"
             isAllCaps = false
+            textSize = 12f
             setTextColor(COL_ERROR)
             setBackgroundResource(R.drawable.bg_button_secondary)
             setOnClickListener { disconnectCurrent() }
         }
-        card.addView(disconnectButton!!, rowParams(top = dp(10), height = dp(44), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        secondaryRow.addView(disconnectButton!!, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginStart = dp(6) })
+        card.addView(secondaryRow, rowParams(top = dp(10), height = dp(44), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // 上次连接摘要（按当前模式显示，信息量 1 行）
+        val lastUsed = if (sshMode) {
+            val c = savedSshForServer
+            if (c != null && c.optString("sshHost").isNotBlank())
+                "${c.optString("sshUser")}@${c.optString("sshHost")}:${c.optInt("sshPort", 22)}" +
+                    " → ${c.optString("remoteHost", "127.0.0.1")}:${c.optInt("remotePort", 3080)}"
+            else null
+        } else {
+            if (prefillHost.isNotBlank() && prefillHost != "127.0.0.1") "$prefillProto://$prefillHost:$prefillPort" else null
+        }
+        lastUsed?.let {
+            card.addView(TextView(this@MainActivity).apply {
+                text = "上次连接: $it"
+                textSize = 10f
+                setTextColor(COL_DIM)
+                gravity = Gravity.CENTER
+                maxLines = 1
+                setHorizontallyScrolling(true)
+            }, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        }
 
         return scroll
     }
@@ -804,8 +913,9 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun status(msg: String) {
+    private fun status(msg: String, err: Boolean = false) {
         statusView?.text = msg
+        statusView?.setTextColor(if (err) COL_ERROR else COL_MUTED)
         statusView?.visibility = if (msg.isBlank()) View.GONE else View.VISIBLE
     }
 
