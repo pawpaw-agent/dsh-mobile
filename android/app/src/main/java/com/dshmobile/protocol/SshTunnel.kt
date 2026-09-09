@@ -122,7 +122,10 @@ class SshTunnel(
                 "-p", sshPort.toString(),
                 "-y",                 // 首连接受未知主机公钥（TOFU，与终端模式一致）
                 "-q",                 // 静默 remote banner/日志
-                "-K", "30",           // keepalive 30s（对齐旧 JSch serverAliveInterval=30s）
+                // ⚠️ 不用 -K <n>：dropbear keepalive 依赖服务端应答，而本部署的
+                // OpenSSH 10.0p1 不回答其 keepalive（实测 90s=30×3 后
+                // "Keepalive timeout"），隧道必死、页面永远加载不完。
+                // 默认 0 = 永不超时（与电脑端普通 ssh -L 行为一致），死链由看门狗兜底。
                 "-N",                 // 纯隧道，不执行远程命令
                 "-L", "127.0.0.1:$port:$remoteHost:$remotePort"
             )
