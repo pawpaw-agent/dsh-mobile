@@ -14,7 +14,8 @@
         android:label="DSH Mobile"
         android:supportsRtl="true"
         android:theme="@style/Theme.DshMobile"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="true"
+        android:extractNativeLibs="true">
 
         <activity
             android:name=".MainActivity"

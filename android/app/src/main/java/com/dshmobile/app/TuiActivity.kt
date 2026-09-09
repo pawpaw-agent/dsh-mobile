@@ -67,7 +67,6 @@ class TuiActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
             )
         }
-        root.addView(statusView)
 
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -125,6 +124,9 @@ class TuiActivity : Activity() {
         ))
         column.addView(buildKeyRow())
         root.addView(column)
+
+        // 状态提示放在最上层（覆盖终端区域），失败信息（如 dbclient 缺失）可见
+        root.addView(statusView)
 
         startDbclient()
     }
