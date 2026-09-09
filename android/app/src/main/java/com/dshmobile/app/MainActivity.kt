@@ -485,9 +485,9 @@ class MainActivity : Activity() {
                 setSingleLine(true)
                 setHorizontallyScrolling(true)
                 when {
-                    pwd -> inputType = InputType.TYPE_CLASS_TEXT
+                    pwd -> inputType = (InputType.TYPE_CLASS_TEXT
                         or InputType.TYPE_TEXT_VARIATION_PASSWORD
-                        or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                        or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
                     number -> inputType = InputType.TYPE_CLASS_NUMBER
                     else -> inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
                 }
