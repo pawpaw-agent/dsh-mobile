@@ -166,7 +166,9 @@ class AgentMonitorService : Service() {
                     return
                 }
                 SshTunnel.Auth.KeyPair(java.io.File(keyPath), cfg.optString("keyPass").ifEmpty { null })
-            } else SshTunnel.Auth.Password(cfg.optString("password", ""))
+            } else SshTunnel.Auth.Password(cfg.optString("password", "")),
+            // 监控只走 HTTPS 客户端，不涉及 WebView 的 origin → 主动让出 3080
+            preferredPorts = SshTunnel.MONITOR_PORT_CANDIDATES,
         )
         Thread {
             tunnel.start()
@@ -176,8 +178,8 @@ class AgentMonitorService : Service() {
                 stopSelf()
                 return@Thread
             }
-            // 后台通知使用和主界面一致的 SSH 回环通道
-            prefs.edit().putString("url", local).apply()
+            // ⚠️ 不写 prefs["url"]：那是 WebView 的回连地址（含固定 3080 端口，origin 敏感）。
+            // 监控隧道用另一个端口，写进去会让下次启动的 baseMatch 判断失配、白白重连一次。
             startMonitor(DshClient(local, launchToken), tunnel)
         }.start()
     }

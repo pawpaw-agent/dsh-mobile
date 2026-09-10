@@ -40,6 +40,14 @@ class SshTunnel(
     private val remoteHost: String,
     private val remotePort: Int,
     private val auth: Auth,
+    /**
+     * 本地转发端口候选（按序取第一个空闲的）。**必须稳定**，理由见 [pickFreePort]。
+     *
+     * 默认是给 WebView 用的 [PORT_CANDIDATES]（3080 优先）；后台监控服务
+     * （AgentMonitorService）不关心 origin，传 [MONITOR_PORT_CANDIDATES] 主动
+     * 让出 3080，免得两边抢端口、有一方退到 13080 后 origin 分家。
+     */
+    private val preferredPorts: List<Int> = PORT_CANDIDATES,
 ) : Closeable {
 
     sealed class Auth {
@@ -107,16 +115,16 @@ class SshTunnel(
      * 首选 3080 与 dsh web 的默认端口一致，撞车时退到 13080。
      */
     private fun pickFreePort(): Int {
-        for (p in PORT_CANDIDATES) {
+        for (p in preferredPorts) {
             if (isPortFree(p)) {
-                if (p != PORT_CANDIDATES.first()) {
-                    Log.w(TAG, "本地端口 ${PORT_CANDIDATES.first()} 被占用，改用 $p")
+                if (p != preferredPorts.first()) {
+                    Log.w(TAG, "本地端口 ${preferredPorts.first()} 被占用，改用 $p")
                 }
                 return p
             }
         }
-        // 明显异常状态（两个端口都被占）→ 显式报错，不偷偷换随机端口（换了 origin 就变）
-        Log.e(TAG, "本地端口候选 ${PORT_CANDIDATES.joinToString()} 全部被占用")
+        // 明显异常状态（候选端口都被占）→ 显式报错，不偷偷换随机端口（换了 origin 就变）
+        Log.e(TAG, "本地端口候选 ${preferredPorts.joinToString()} 全部被占用")
         return -1
     }
 
@@ -140,7 +148,7 @@ class SshTunnel(
             val port = pickFreePort()
             if (port < 0) {
                 onStateChange?.invoke(
-                    "failed: 本地端口 ${PORT_CANDIDATES.joinToString(" / ")} 都被占用，请关掉占用它的应用后重试")
+                    "failed: 本地端口 ${preferredPorts.joinToString(" / ")} 都被占用，请关掉占用它的应用后重试")
                 return
             }
             val args = mutableListOf(
@@ -280,9 +288,12 @@ class SshTunnel(
     companion object {
         private const val TAG = "SshTunnel"
 
-        /** 本地转发端口候选（按序取第一个空闲的）：3080 与 dsh web 默认端口一致，
-         *  被占时退到 13080。端口必须稳定，理由见 [pickFreePort]。 */
+        /** WebView 用的本地转发端口候选（按序取第一个空闲的）：3080 与 dsh web
+         *  默认端口一致，被占时退到 13080。端口必须稳定，理由见 [pickFreePort]。 */
         val PORT_CANDIDATES = listOf(3080, 13080)
+
+        /** 后台监控服务用的候选：主动让出 3080 给 WebView（它不关心 origin）。 */
+        val MONITOR_PORT_CANDIDATES = listOf(13080, 3080)
 
         /** dbclient 可执行文件路径：由 DshApp.onCreate 注入（nativeLibraryDir/libdbclient.so）。 */
         @Volatile
