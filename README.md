@@ -111,6 +111,7 @@ dsh-handheld/
 │       │   │   ├── MainActivity.kt           # 连接屏 + WebView 壳 + 隧道编排
 │       │   │   ├── TuiActivity.kt            # SSH 终端模式（PTY + Termux 渲染）
 │       │   │   ├── DshTerminalExtraKeys.kt   # 终端底部常驻键排
+│       │   │   ├── SecurePrefs.kt            # 凭据静态加密（AndroidKeyStore AES-GCM）
 │       │   │   └── DshApp.kt                 # Application：持有保活 WebView 与唯一隧道
 │       │   └── protocol/
 │       │       └── SshTunnel.kt              # dbclient 进程 + 端口选择 + 看门狗
@@ -120,14 +121,97 @@ dsh-handheld/
 ├── scripts/
 │   ├── build-dropbear.sh                     # 交叉编译 dropbear dbclient
 │   ├── build-apk.sh
-│   └── push-via-api.py
+│   ├── push-via-api.py                       # 增量推送（git 传输不可用时）
+│   └── mirror-via-api.py                     # 整树镜像推送（重命名/删除时更稳）
 ├── docs/
 │   ├── known-issues.md                       # 已知问题与行为记录
 │   ├── dsh-protocol.md                       # DSH 线上协议逆向规格（历史存档）
 │   └── dsh-plugins-404-fix.md
-├── .github/workflows/ci.yml                  # 构建 dbclient → 构建 APK
+├── .github/workflows/ci.yml                  # 构建 dbclient → 构建并校验 release APK
 └── package.json
 ```
+
+---
+
+## 凭据存储
+
+SSH 密码与私钥口令**不以明文落盘**：
+
+```
+SharedPreferences "dsh-handheld"
+  ssh_json      → enc.v1.<base64(iv ‖ AES-256-GCM 密文)>
+  server_token  → 同上
+  url / ssh_enabled → 明文（非敏感）
+```
+
+密钥由 **AndroidKeyStore** 持有且不可导出，因此即便应用私有目录被完整复制到另一台设备
+也无法解密。实现见 `SecurePrefs.kt`。
+
+**不使用** `androidx.security:security-crypto`——该库的全部 API 已被官方废弃
+（1.1.0-beta01 起："Deprecated all APIs in favour of existing platform APIs and direct use
+of Android Keystore"），故直接按官方指引使用平台 Keystore，不引入额外依赖。
+
+**兼容性**：读取时若发现历史版本写入的明文，会原样返回并**顺手迁移**为密文，用户无感。
+若 Keystore 密钥失效（设备策略变更等），解密失败按“未配置”处理并让用户重新输入，
+而不是让 App 崩溃。
+
+**不在威胁模型内**：已 root 且能在应用进程内执行代码的攻击者——此时应用自身必须能解密，
+任何应用侧加密都无济于事。
+
+---
+
+## 版本与升级
+
+### 依赖为什么“不是最新”
+
+androidx 能否升级由 AAR 元数据里的 `minCompileSdk` 决定，**不是有新版就能升**：
+
+| 库 | 当前 | 升级上限（compileSdk 34） |
+|---|---|---|
+| `androidx.core:core-ktx` | 1.13.1 | 1.13.1（1.15.0 要 35，1.19.0 要 37） |
+| `androidx.webkit:webkit` | 1.17.0 | 已是当前 compileSdk 下的最高 |
+| `termux terminal-view` | 0.118.1 | 见下方 vendoring 说明 |
+
+### 待办的现代化项
+
+- **compileSdk / targetSdk 34 → 36**，连带 AGP → 9.x、Gradle → 9.x、Kotlin → 2.x。
+  耦合改动且涉及 K2 编译器迁移，应单独成一个变更并做真机回归。
+- **启用 R8**：`release` 变体目前 `isMinifyEnabled = false`。首次启用压缩/混淆需真机验证
+  （R8 可能裁掉运行期才引用的类），不宜与签名变更同时进行。
+
+### Termux 组件的 vendoring
+
+`android/app/src/main/java/com/termux/shared/terminal/io/extrakeys/` 下的 6 个文件是从
+Termux `v0.118.1` 复制的副本，与 JitPack 依赖 `terminal-view` 内的同名类**同包同名**，
+编译时**源码优先于 jar**：
+
+- **4 个逐字未改**（仅加归属头）；
+- **2 个有本地改动**：`ExtraKeyButton`（新增 `rowSpan` 配置项）与 `ExtraKeysView`
+  （字号与纵向跨行）。两文件的头注释已写明区别。
+
+**升级 `terminal-view` 时**：未 vendored 的类会随依赖更新，这 6 个副本**不会** ——
+上游在这几个类里的修复无法自动到达，需手工比对合并。
+
+---
+
+## 发布与签名
+
+发布产物由 CI 用 **release 签名**构建，签名材料经环境变量注入，**不入库**（公开仓库里的
+签名密钥等于任何人都能签出可覆盖安装的“升级包”）：
+
+| GitHub Secret | 内容 |
+|---|---|
+| `SIGNING_KEYSTORE_BASE64` | PKCS12 keystore 的 base64 |
+| `SIGNING_STORE_PASSWORD` | keystore 口令 |
+| `SIGNING_KEY_ALIAS` | 密钥别名 |
+| `SIGNING_KEY_PASSWORD` | 密钥口令 |
+
+secrets 缺失时（fork / PR）回退 debug 签名并告警，该产物**不可对外分发**。CI 另有一道
+硬校验：release APK 若含 `application-debuggable` 则**构建直接失败**——`debuggable=true`
+会让 `run-as` 无需 root 即可读取应用私有目录，并使 WebView 远程调试对整个局域网开放。
+
+> ⚠️ **务必备份 keystore 与口令。** 丢失后无法再发布可覆盖安装的升级包，只能让所有用户
+> 卸载重装。
 
 ---
 
@@ -145,8 +229,9 @@ dsh 官方 Web 前端是桌面布局，窄屏下侧栏会常驻挤占内容。�
 ## 注意事项
 
 - **明文 HTTP** — `usesCleartextTraffic="true"`。隧道模式下流量本身已由 SSH 加密，明文仅存在于设备本地回环；但如果用局域网直连，请确保在可信内网。
-- **安全** — dsh 0.1.2+ 默认启用浏览器 token 认证；SSH 隧道再叠加一层 SSH 认证。公开 WiFi 下建议用 Tailscale 而不是直接暴露端口。
+- **安全** — SSH 密码与 dsh token 经 AndroidKeyStore 加密后落盘（见「凭据存储」）；发布包不可调试。dsh 0.1.2+ 默认启用浏览器 token 认证，SSH 隧道再叠加一层 SSH 认证。公开 WiFi 下建议用 Tailscale 而不是直接暴露端口。
 - **仅 arm64** — `dbclient` 目前只为 `arm64-v8a` 构建，不适用于 32 位或 x86 设备。
+- **签名变更需重装** — 0.1.3 起改用独立发布签名（此前为 debug 签名）。签名不同，Android **不允许覆盖安装**：需先卸载旧版，已保存的连接配置会一并清除。
 - **真机验证状态** — 见 `docs/known-issues.md`。
 
 ---

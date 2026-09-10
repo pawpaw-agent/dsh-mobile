@@ -1,7 +1,14 @@
 /*
  * Derived from Termux app v0.118.1 (GPL-3.0),
  * github.com/termux/termux-app - termux-shared:terminal/io/extrakeys.
- * Vendored unmodified (package kept) to reuse the extra-keys UI.
+ *
+ * Vendored and LOCALLY MODIFIED by dsh-handheld: 新增 `rowSpan` 配置项（KEY_ROW_SPAN、getRowSpan()）
+ * 其余内容与上游 v0.118.1 一致。
+ *
+ * 注意：本文件与 JitPack 依赖 `terminal-view` 内的同名类**同包同名**，编译时源码
+ * 优先于 jar，因此这里的副本会永久覆盖依赖里的版本。升级 terminal-view 时，
+ * 未被 vendored 的类会更新，而本文件**不会** —— 上游修复与本文件的改动都可能需要
+ * 手工合并。
  */
 package com.termux.shared.terminal.io.extrakeys;
 

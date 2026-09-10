@@ -319,7 +319,7 @@ class MainActivity : Activity() {
         val currentUrl = webView?.url
         val baseMatch = savedUrl != null && currentUrl != null &&
             currentUrl.trimEnd('/').startsWith(savedUrl.trimEnd('/'))
-        val sshSaved = prefs.getString("ssh_json", null)?.let {
+        val sshSaved = SecurePrefs.getString(prefs, "ssh_json")?.let {
             runCatching { JSONObject(it) }.getOrNull()
         }?.takeIf { it.optString("sshHost").isNotBlank() && it.optString("sshUser").isNotBlank() }
         // 三分支判定是「重开 App 走哪条路」的唯一决策点，此前零日志：
@@ -344,7 +344,7 @@ class MainActivity : Activity() {
 
     /** 启动时从保存的 SSH 配置恢复隧道，成功后把 WebView 指向新的本地端口 URL。 */
     private fun autoConnectSsh(@Suppress("UNUSED_PARAMETER") savedUrl: String?) {
-        val savedSsh = prefs.getString("ssh_json", null)?.let {
+        val savedSsh = SecurePrefs.getString(prefs, "ssh_json")?.let {
             try { JSONObject(it) } catch (_: Exception) { null }
         } ?: run { connectView?.visibility = View.VISIBLE; return }
         if (savedSsh.optString("sshHost").isBlank() || savedSsh.optString("sshUser").isBlank()) {
@@ -526,7 +526,7 @@ class MainActivity : Activity() {
         var step3Card: LinearLayout? = null   // 连接中
         var connectMainBtn: Button? = null    // 底部主按钮（每步复用）
         var webMode = true
-        val savedSsh = prefs.getString("ssh_json", null)?.let {
+        val savedSsh = SecurePrefs.getString(prefs, "ssh_json")?.let {
             try { JSONObject(it) } catch (_: Exception) { null }
         }
 
@@ -948,7 +948,7 @@ class MainActivity : Activity() {
             if (!token.isNullOrEmpty() && token.length >= 40) {
                 // 只记长度：令牌前缀本身也是凭据（此前记了 take(8)，等于往 logcat 写半个口令）
                 Log.i(TAG, "autoFetchToken: SUCCESS len=${token.length}")
-                prefs.edit().putString(PREF_SERVER_TOKEN, token).apply()
+                SecurePrefs.putString(prefs, PREF_SERVER_TOKEN, token)
                 return token
             }
         }
@@ -972,7 +972,7 @@ class MainActivity : Activity() {
         unauthorizedCleanTried = false
         loadRetriesLeft = 3
         prefs.edit().putString("url", url).apply()
-        val token = prefs.getString(PREF_SERVER_TOKEN, "")?.trim().orEmpty()
+        val token = SecurePrefs.getString(prefs, PREF_SERVER_TOKEN)?.trim().orEmpty()
         val needsToken = token.isNotEmpty() && (forceToken || !sshTokenAck)
         // 认证决策是 401/431 类问题的第一现场：是否带 token、cookie jar 是否清了、
         // 最终请求的 URL 长什么样，全部留痕（token 本身不记，只记长度）。
@@ -1061,9 +1061,10 @@ class MainActivity : Activity() {
         sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, auth: SshTunnel.Auth
     ) {
         try {
-            prefs.edit()
-                .putString("ssh_json", sshConfigJson(sshHost, sshPort, sshUser, remotePort, auth).toString())
-                .apply()
+            SecurePrefs.putString(
+                prefs, "ssh_json",
+                sshConfigJson(sshHost, sshPort, sshUser, remotePort, auth).toString()
+            )
         } catch (_: Exception) {}
     }
 

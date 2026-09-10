@@ -168,7 +168,7 @@ class TuiActivity : Activity() {
         }
 
         val prefs = getSharedPreferences("dsh-handheld", MODE_PRIVATE)
-        val rawSsh = prefs.getString("ssh_json", null)
+        val rawSsh = SecurePrefs.getString(prefs, "ssh_json")
         val cfg = rawSsh?.let { runCatching { JSONObject(it) }.getOrNull() }
         val host = cfg?.optString("sshHost") ?: ""
         val user = cfg?.optString("sshUser") ?: ""
@@ -272,8 +272,8 @@ class TuiActivity : Activity() {
     private fun resolveKeyPath(): String? {
         val libDir = applicationInfo.nativeLibraryDir
         // 1) 连接屏导入的私钥
-        val imported = getSharedPreferences("dsh-handheld", MODE_PRIVATE)
-            .getString("ssh_json", null)?.let {
+        val imported = SecurePrefs
+            .getString(getSharedPreferences("dsh-handheld", MODE_PRIVATE), "ssh_json")?.let {
                 runCatching { JSONObject(it) }.getOrNull()
             }?.optString("keyPath", "")
         if (!imported.isNullOrBlank() && File(imported).exists()) return imported

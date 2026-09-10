@@ -71,13 +71,53 @@ jobs:
           cp dbclient/LICENSE.txt android/app/src/main/jniLibs/arm64-v8a/LICENSE-dropbear.txt 2>/dev/null || true
           ls -la android/app/src/main/jniLibs/arm64-v8a/
 
-      - name: Build debug APK
+      # 签名材料只在此步落地，构建后立即删除；绝不写入仓库。
+      - name: Materialize release signing material
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::warning::签名 secrets 缺失，release 将回退 debug 签名；该产物不可对外分发。"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "SIGNING_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
           cd android
-          gradle assembleDebug --no-daemon
+          gradle assembleRelease --no-daemon
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
+
+      # 硬校验：发布产物必须「不可调试」。debuggable=true 会让 `run-as` 无需 root
+      # 即可读取应用私有目录（含经 Keystore 加密前的明文回退路径），并使 WebView
+      # 远程调试对整个局域网开放。此步失败即构建失败，避免误发布。
+      - name: Verify APK is not debuggable
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          test -f "$APK" || { echo "::error::未找到 release APK"; exit 1; }
+          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort | tail -n1)
+          BADGE=$("$AAPT" dump badging "$APK" | grep -c "application-debuggable" || true)
+          if [ "$BADGE" != "0" ]; then
+            echo "::error::APK 是 debuggable 的，拒绝发布"
+            "$AAPT" dump badging "$APK" | grep "application-debuggable"
+            exit 1
+          fi
+          echo "✓ application-debuggable 不存在（不可调试）"
+          "$AAPT" dump badging "$APK" | grep -E "^package|^application-label|sdkVersion|targetSdkVersion"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: dsh-handheld-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: dsh-handheld-release
+          path: android/app/build/outputs/apk/release/app-release.apk
