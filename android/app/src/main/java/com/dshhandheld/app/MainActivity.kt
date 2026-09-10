@@ -145,8 +145,11 @@ class MainActivity : Activity() {
         // 均已在前端壳的 staticModules 种子里（已验证），无需额外注入。
         // 上游插件（mexiaosqwq/dsh-web-mobile，MIT）的 id 与缓存版本号。id 必须与
         // APK assets 里那个 bundle 内部的 `id: "dsh-web-mobile"` 一致，改不得。
+        // rev 只是 WebView 侧的缓存键：内容变更必须换 rev，否则可能命中旧缓存。
+        // `-dsh1` 后缀标记我们对 bundle 打过一处补丁（摘掉「删除会话」注入项），
+        // 补丁内容与重新 vendoring 步骤见 docs/vendored-plugin-patches.md。
         const val MOBILE_PLUGIN_ID = "dsh-web-mobile"
-        const val MOBILE_PLUGIN_REV = "dsh-web-mobile-2.4.0"
+        const val MOBILE_PLUGIN_REV = "dsh-web-mobile-2.4.0-dsh1"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
         private val MOBILE_PLUGIN_JS = """
             (function(){

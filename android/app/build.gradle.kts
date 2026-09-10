@@ -46,8 +46,8 @@ android {
         applicationId = "com.dshhandheld.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 30
-        versionName = "0.1.3"
+        versionCode = 31
+        versionName = "0.1.4"
     }
 
     buildTypes {

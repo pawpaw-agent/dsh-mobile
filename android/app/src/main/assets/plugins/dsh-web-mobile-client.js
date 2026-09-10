@@ -5752,7 +5752,15 @@ function apply(ctx) {
     (0, phone_chrome_ts_1.installOverlayInteractions)(ctx);
     // Session deletion, injected into each session row's ⋯ menu (beside
     // rename / fork / archive) with a confirm dialog. Mobile-only.
-    (0, session_menu_ts_1.installSessionMenuDelete)(ctx);
+    //
+    // PATCHED (dsh-handheld): DISABLED — the only local change to this bundle.
+    // Upstream's item POSTs to /api/mobile-nav.session.delete, a route owned by
+    // this plugin's HOST half, which this app deliberately never installs (the
+    // dsh server stays completely unmodified — see README 「移动端界面适配」).
+    // Without the host half the item can only ever answer 「删除失败：HTTP 404」,
+    // so it is not installed at all. Re-apply after re-vendoring the bundle:
+    // docs/vendored-plugin-patches.md.
+    // (0, session_menu_ts_1.installSessionMenuDelete)(ctx);
     // Sidebar swipe gestures: edge swipe-in opens the drawer, content swipe-out
     // closes it (release-classified, zero inline transforms — A 档).
     (0, sidebar_swipe_ts_1.installSidebarSwipe)(ctx);

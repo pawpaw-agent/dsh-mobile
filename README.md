@@ -233,6 +233,12 @@ dsh 官方 Web 前端是桌面布局，窄屏下侧栏会常驻挤占内容。�
 
 > 该项目是第三方作品，其许可证见 `android/app/src/main/assets/plugins/LICENSE-dsh-web-mobile.txt`。
 
+> ⚠️ **对上游产物打了唯一一处补丁**：摘掉上游 v2.4.0 新增的「删除会话」菜单项——它的宿主
+> 半边（`POST /api/mobile-nav.session.delete`）在「服务端零改动」的前提下不存在，点它只会报
+> `HTTP 404`。补丁位置、影响面与重新 vendoring 步骤见
+> [`docs/vendored-plugin-patches.md`](docs/vendored-plugin-patches.md)（该文也写了会话删除的
+> 「外部移除」做法：dsh 官方不在接口里提供物理删除，UI 上只有单向且不回收磁盘的归档）。
+
 ---
 
 ## 注意事项
