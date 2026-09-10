@@ -612,26 +612,8 @@ class MainActivity : Activity() {
         val sshUserInput = input("用户名", savedSsh?.optString("sshUser") ?: "")
         step2Card!!.addView(sshUserInput, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        step2Card!!.addView(label("电脑登录密码"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        val sshPassInput = input("密码", savedSsh?.optString("password") ?: "", pwd = true)
-        val passRow = pwdRow(sshPassInput)
-        step2Card!!.addView(passRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // dsh 端口：与 SSH 无关，但属于「怎么连上电脑的 dsh」，常显不折叠
-        step2Card!!.addView(label("dsh 端口"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        val sshTargetPortInput = input(
-            "3080",
-            (savedSsh?.optInt("remotePort", DEFAULT_PORT.toInt()) ?: DEFAULT_PORT.toInt()).toString(),
-            number = true
-        )
-        step2Card!!.addView(sshTargetPortInput, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        step2Card!!.addView(stepHint("dsh 网页的端口，默认 3080，一般不用改。"),
-            rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // 高级设置（折叠）：登录方式 / 私钥
-        val privateKeySection = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
-
-        privateKeySection.addView(label("登录方式"), rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+        // 登录方式（主区常显）：密码 / 私钥 —— 选哪个就显示哪一套字段
+        step2Card!!.addView(label("登录方式"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
         val authPassBtn = segment("密码", true)
         val authKeyBtn = segment("私钥", false)
         val authGroup = RadioGroup(this@MainActivity).apply {
@@ -639,9 +621,21 @@ class MainActivity : Activity() {
             addView(authPassBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(6) })
             addView(authKeyBtn, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginStart = dp(6) })
         }
-        privateKeySection.addView(authGroup, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        step2Card!!.addView(authGroup, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        val keyPathInput = input("私钥路径（可导入）", savedSsh?.optString("keyPath") ?: "")
+        // 密码分支：标题 + 输入框打包，随登录方式整体显隐
+        //（此前标题无条件显示、输入框单独 GONE，选私钥后主区会剩一个空标题）
+        val sshPassInput = input("密码", savedSsh?.optString("password") ?: "", pwd = true)
+        val passRow = pwdRow(sshPassInput)
+        val passBlock = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(label("电脑登录密码"), rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(passRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        step2Card!!.addView(passBlock, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // 私钥分支
+        val keyPathInput = input("点「导入」选文件，或直接填路径", savedSsh?.optString("keyPath") ?: "")
         keyPathInput.isFocusable = true
         sshKeyPathInput = keyPathInput
         val browseKeyBtn = Button(this@MainActivity).apply {
@@ -657,43 +651,38 @@ class MainActivity : Activity() {
             addView(keyPathInput, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
             addView(browseKeyBtn, LinearLayout.LayoutParams(dp(56), dp(42)))
         }
-        privateKeySection.addView(keyPathRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-
-        val keyPassInput = input("私钥口令（可选）", savedSsh?.optString("keyPass") ?: "", pwd = true)
+        val keyPassInput = input("没有就留空", savedSsh?.optString("keyPass") ?: "", pwd = true)
         val keyPassRow = pwdRow(keyPassInput)
-        privateKeySection.addView(keyPassRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        val keyBlock = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(label("私钥路径"), rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(keyPathRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(label("私钥口令（可选）"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(keyPassRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        step2Card!!.addView(keyBlock, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // 认证方式切换：密码 / 私钥字段显隐
+        // 认证方式切换：两套字段整体显隐（无折叠区，不会出现「字段藏在别处」的状态）
         val savedAuthType = savedSsh?.optString("authType", "password") ?: "password"
         if (savedAuthType == "key") authKeyBtn.isChecked = true
         fun syncAuthFields() {
             val key = authKeyBtn.isChecked
-            keyPathRow.visibility = if (key) View.VISIBLE else View.GONE
-            keyPassRow.visibility = if (key) View.VISIBLE else View.GONE
-            passRow.visibility = if (key) View.GONE else View.VISIBLE
+            passBlock.visibility = if (key) View.GONE else View.VISIBLE
+            keyBlock.visibility = if (key) View.VISIBLE else View.GONE
         }
         authGroup.setOnCheckedChangeListener { _, _ -> syncAuthFields() }
         syncAuthFields()
 
-        // 高级设置折叠开关
-        val advancedWrap = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
-        val advancedToggle = Button(this@MainActivity).apply {
-            text = "高级设置 ▾"
-            isAllCaps = false
-            textSize = 12f
-            setTextColor(COL_DIM)
-            setBackgroundResource(R.drawable.bg_button_secondary)
-            setOnClickListener {
-                val hidden = privateKeySection.visibility == View.GONE
-                privateKeySection.visibility = if (hidden) View.VISIBLE else View.GONE
-                this.text = if (hidden) "高级设置 ▴" else "高级设置 ▾"
-            }
-        }
-        advancedWrap.addView(advancedToggle, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(36)))
-        advancedWrap.addView(privateKeySection.apply { visibility = View.GONE },
-            rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        step2Card!!.addView(advancedWrap, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        // dsh 端口：dsh 网页在你电脑上的端口
+        step2Card!!.addView(label("dsh 端口"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        val sshTargetPortInput = input(
+            "3080",
+            (savedSsh?.optInt("remotePort", DEFAULT_PORT.toInt()) ?: DEFAULT_PORT.toInt()).toString(),
+            number = true
+        )
+        step2Card!!.addView(sshTargetPortInput, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        step2Card!!.addView(stepHint("dsh 网页的端口，默认 3080，一般不用改。"),
+            rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         // Step 2 底部：上一步 + 主按钮（文案跟模式）
         val step2Nav = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
@@ -723,8 +712,10 @@ class MainActivity : Activity() {
                 if (sh.isBlank() || su.isBlank()) { status("请填写电脑地址和登录账号", true); guideBackToStep2(); return@setOnClickListener }
                 val auth = if (authKeyBtn.isChecked) {
                     val path = keyPathInput.text.toString().trim()
-                    if (path.isBlank()) { status("请选择 SSH 私钥", true); guideBackToStep2(); return@setOnClickListener }
-                    SshTunnel.Auth.KeyPair(File(path), keyPassInput.text.toString().ifEmpty { null })
+                    if (path.isBlank()) { status("请填写私钥路径，或点「导入」选文件", true); guideBackToStep2(); return@setOnClickListener }
+                    val keyFile = File(path)
+                    if (!keyFile.exists()) { status("私钥文件不存在：$path", true); guideBackToStep2(); return@setOnClickListener }
+                    SshTunnel.Auth.KeyPair(keyFile, keyPassInput.text.toString().ifEmpty { null })
                 } else {
                     if (sshPassInput.text.toString().isEmpty()) { status("请填写电脑登录密码", true); guideBackToStep2(); return@setOnClickListener }
                     SshTunnel.Auth.Password(sshPassInput.text.toString())
@@ -968,7 +959,9 @@ class MainActivity : Activity() {
                 tunnel.close()
                 runOnUiThread {
                     status("隧道建立失败（检查 SSH 主机/端口/用户/认证）")
-                    guideLineFail(1, "① 检查电脑 ✗ 连不上你的电脑（检查地址/账号/密码）")
+                    // 提示词跟登录方式：私钥用户看到「检查密码」会懵
+                    val what = if (auth is SshTunnel.Auth.KeyPair) "私钥" else "密码"
+                    guideLineFail(1, "① 检查电脑 ✗ 连不上你的电脑（检查地址/账号/$what）")
                     guideLine(2, "② 建立安全通道 未开始", running = true)
                     endConnect()
                 }
