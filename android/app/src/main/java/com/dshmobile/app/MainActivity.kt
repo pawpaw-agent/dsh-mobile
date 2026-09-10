@@ -1334,8 +1334,11 @@ class MainActivity : Activity() {
 
     /** 按隧道状态刷新连接屏上的「断开连接」按钮。 */
     private fun refreshConnectState() {
-        disconnectButton?.visibility =
-            if ((application as DshApp).sshTunnel != null) View.VISIBLE else View.GONE
+        val tunneled = (application as DshApp).sshTunnel != null
+        disconnectButton?.visibility = if (tunneled) View.VISIBLE else View.GONE
+        // 回到连接屏时清掉残留的进度文案（「连接中… http://127.0.0.1:端口」既过时又是术语）。
+        // 隧道不在时不覆盖调用方刚设的错误提示。
+        if (tunneled) status("已连上电脑")
     }
 
     /** 失败自动重试：5s 后重载（若隧道仍活；watchdog 会重建死隧道）。每次 connectWeb 重置 3 次余量。 */
