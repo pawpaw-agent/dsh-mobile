@@ -236,13 +236,20 @@ class MainActivity : Activity() {
                     val u = webView?.url
                     if (u?.startsWith("http") == true && !u.contains("?token=")) {
                         sshTokenAck = true
+                        Log.i(TAG, "onPageFinished: 正式页面加载完成 → ack=true url=$u")
                         guideLineDone(3, "③ 打开 dsh 网页 ✓ 已打开")
+                    } else if (u != null) {
+                        // about:blank / 带 token 的中间页：刻意不置 ack（1.5.2 的 401 回归源于此）
+                        Log.i(TAG, "onPageFinished: 非正式页面，不置 ack url=$u")
                     }
                     hideErrorPage()
                 }
                 override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                     // ERR_ABORTED(-3) = 导航被取消（重载/加载 about:blank 打断上一请求），不算失败
                     if (request?.isForMainFrame == true && error?.errorCode != -3) {
+                        // 错误描述此前只上屏（给用户看的文案会随场景改写），日志里必须留原始值
+                        Log.w(TAG, "onReceivedError: code=${error?.errorCode} " +
+                            "desc=${error?.description} url=${request.url}")
                         showErrorPage(error?.description?.toString() ?: "网络错误")
                         scheduleLoadRetry()
                     }
@@ -250,6 +257,9 @@ class MainActivity : Activity() {
                 override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, resp: android.webkit.WebResourceResponse?) {
                     if (request?.isForMainFrame == true) {
                         val code = resp?.statusCode ?: 0
+                        // 431（cookie 累积顶爆头部上限）当年就是在这里静默失败、只能靠 CDP 手工挖
+                        Log.w(TAG, "onReceivedHttpError: HTTP $code url=${request.url} " +
+                            "reason=${resp?.reasonPhrase}")
                         if (code == 401) {
                             handleUnauthorized(view)
                         } else {
@@ -310,14 +320,23 @@ class MainActivity : Activity() {
         val sshSaved = prefs.getString("ssh_json", null)?.let {
             runCatching { JSONObject(it) }.getOrNull()
         }?.takeIf { it.optString("sshHost").isNotBlank() && it.optString("sshUser").isNotBlank() }
+        // 三分支判定是「重开 App 走哪条路」的唯一决策点，此前零日志：
+        // 出问题时（白屏 / 意外重连 / 该重连却没重连）无法从日志判断走了哪条。
+        Log.i(TAG, "onCreate: savedUrl=$savedUrl currentUrl=$currentUrl baseMatch=$baseMatch " +
+            "retainedWebView=${app.retainedWebView != null} sshPrefs=${sshSaved != null}")
         if (savedUrl != null && !baseMatch) {
             if (sshSaved != null) {
+                Log.i(TAG, "onCreate: 分支2 冷启动重连（WebView 不在保存的基址上 + ssh 配置可用）")
                 autoConnectSsh(savedUrl)
             } else {
+                Log.i(TAG, "onCreate: 分支3 停留连接屏（有 url 但 ssh 配置不可用）")
                 connectView?.visibility = View.VISIBLE
             }
         } else if (!currentUrl.isNullOrBlank()) {
+            Log.i(TAG, "onCreate: 分支1 直接回网页（复用保活 WebView，不重连不重载）")
             connectView?.visibility = View.GONE
+        } else {
+            Log.i(TAG, "onCreate: 分支3 停留连接屏（无保存 url 且 WebView 为空）")
         }
     }
 
@@ -331,20 +350,27 @@ class MainActivity : Activity() {
         }
         val app = application as DshApp
         // 用户可能已在连接屏手动点了「连接」：自动恢复不抢占
-        if (!beginConnect()) return
+        if (!beginConnect()) { Log.i(TAG, "autoConnectSsh: 连接进行中，让位给手动连接"); return }
         status("自动重建 SSH 隧道…")
         connectView?.visibility = View.VISIBLE
+        Log.i(TAG, "autoConnectSsh: 冷启动恢复 " +
+            "${savedSsh.optString("sshUser")}@${savedSsh.optString("sshHost")}:" +
+            "${savedSsh.optInt("sshPort", 22)} → 远端 ${savedSsh.optInt("remotePort", 3080)} " +
+            "auth=${savedSsh.optString("authType", "password")}")
         Thread {
             val keyPath = savedSsh.optString("keyPath", "")
             if (savedSsh.optString("authType", "password") == "key" && keyPath.isBlank()) {
+                Log.w(TAG, "autoConnectSsh: 私钥路径为空，放弃自动恢复")
                 runOnUiThread { status("私钥路径为空，请到连接屏重新填写"); endConnect() }
                 return@Thread
             }
             // 非强制：后台服务可能已经用同一份配置建好了隧道，直接复用（不必重拨）
             val tunnel = app.ensureTunnel(savedSsh, force = false)
             val base = tunnel?.localBaseUrl
+            Log.i(TAG, "autoConnectSsh: ensureTunnel(force=false) → base=$base")
             // 失败先退：隧道没起来就不再干跑 token 探测（4×8s 白等）
             if (tunnel == null || base == null) {
+                Log.w(TAG, "autoConnectSsh: 隧道未建立，回连接屏等用户手动重试")
                 runOnUiThread { status("自动连接失败，请在连接屏手动重试"); refreshConnectState(); endConnect() }
                 return@Thread
             }
@@ -918,7 +944,8 @@ class MainActivity : Activity() {
             Log.i(TAG, "autoFetchToken: cmd#$i rc=${if (out == null) "null" else "len=" + out.length}")
             val token = out?.trim()
             if (!token.isNullOrEmpty() && token.length >= 40) {
-                Log.i(TAG, "autoFetchToken: SUCCESS len=${token.length} prefix=${token.take(8)}…")
+                // 只记长度：令牌前缀本身也是凭据（此前记了 take(8)，等于往 logcat 写半个口令）
+                Log.i(TAG, "autoFetchToken: SUCCESS len=${token.length}")
                 prefs.edit().putString(PREF_SERVER_TOKEN, token).apply()
                 return token
             }
@@ -945,12 +972,17 @@ class MainActivity : Activity() {
         prefs.edit().putString("url", url).apply()
         val token = prefs.getString(PREF_SERVER_TOKEN, "")?.trim().orEmpty()
         val needsToken = token.isNotEmpty() && (forceToken || !sshTokenAck)
+        // 认证决策是 401/431 类问题的第一现场：是否带 token、cookie jar 是否清了、
+        // 最终请求的 URL 长什么样，全部留痕（token 本身不记，只记长度）。
+        Log.i(TAG, "connectWeb: url=$url forceToken=$forceToken ack=$sshTokenAck " +
+            "tokenLen=${token.length} needsToken=$needsToken")
         if (needsToken) {
             // 431 修复（实测根因）：每次 token 交换 WebView 会追加一个 365 天有效的
             // dsh-auth-* cookie（127.0.0.1 同 host），累计 69 个 ≈ 15.5KB 顶到
             // 服务器 maxHeaderSize 16KB → HTTP 431 → 页面永远加载失败。
             // 要重新认证时先清空 cookie jar（本 WebView 唯一用途就是这一页；
             // 服务端会在 /?token= 交换后下发新 cookie）。
+            Log.i(TAG, "connectWeb: 清空 cookie jar（防 dsh-auth-* 累积 → HTTP 431）")
             android.webkit.CookieManager.getInstance().removeAllCookies(null)
         }
         webView?.loadUrl(if (needsToken) "$url/?token=$token" else url)
@@ -962,12 +994,16 @@ class MainActivity : Activity() {
         guideStep3Show()
         val app = application as DshApp
         val cfg = sshConfigJson(sshHost, sshPort, sshUser, remotePort, auth)
+        Log.i(TAG, "connectViaSsh: 手动连接（强制重建）$sshUser@$sshHost:$sshPort → 远端 $remotePort " +
+            "auth=${if (auth is SshTunnel.Auth.KeyPair) "key" else "password"}")
         Thread {
             // 用户明确点了连接 → 强制重建（可能正是一条他自己觉得有问题的隧道）
             val tunnel = app.ensureTunnel(cfg, force = true)
             val base = tunnel?.localBaseUrl
+            Log.i(TAG, "connectViaSsh: ensureTunnel(force=true) → base=$base")
             // 失败先退：隧道没起来就不再干跑 token 探测（4×8s 白等）
             if (tunnel == null || base == null) {
+                Log.w(TAG, "connectViaSsh: 隧道建立失败")
                 runOnUiThread {
                     status("隧道建立失败（检查 SSH 主机/端口/用户/认证）")
                     // 提示词跟登录方式：私钥用户看到「检查密码」会懵
@@ -985,6 +1021,7 @@ class MainActivity : Activity() {
             // 自动获取最新 token（服务重启后旧 token 失效；失败静默回退）
             val token = autoFetchToken(tunnel)
             runOnUiThread {
+                Log.i(TAG, "connectViaSsh: token=${if (token != null) "已获取" else "未获取（仍尝试打开）"}")
                 if (token != null) guideLineDone(2, "② 建立安全通道 ✓ 已连通")
                 else guideLineFail(2, "② 建立安全通道 ⚠ 未获取令牌，仍尝试打开")
                 persistSshConfig(sshHost, sshPort, sshUser, remotePort, auth)
@@ -1123,9 +1160,11 @@ class MainActivity : Activity() {
         if (!unauthorizedCleanTried && url.contains("?token=")) {
             unauthorizedCleanTried = true
             sshTokenAck = false
+            Log.w(TAG, "401: 带 token 页失败 → 回退干净 URL 重试 url=$url")
             lastUrl?.let { view?.loadUrl(it.substringBefore("?")) }
             return
         }
+        Log.w(TAG, "401: 干净 URL 仍失败（cookie 确实失效）→ 令牌提示页 url=$url")
         showTokenPromptPage()
     }
 
@@ -1204,27 +1243,42 @@ class MainActivity : Activity() {
     // ── 生命周期 ──────────────────────────────────────────────
     override fun onResume() {
         super.onResume()
+        Log.i(TAG, "onResume: url=${webView?.url} tunnel=${(application as DshApp).sshTunnel != null}")
         webView?.onResume(); webView?.resumeTimers()
         refreshConnectState()
     }
 
     override fun onDestroy() {
+        Log.i(TAG, "onDestroy: isFinishing=$isFinishing（隧道由 DshApp 持有，不随 Activity 销毁）")
         (application as? DshApp)?.removeTunnelObserver(tunnelObserver)
         super.onDestroy()
     }
 
     override fun onPause() {
         super.onPause()
+        Log.i(TAG, "onPause")
         webView?.onPause(); webView?.pauseTimers()
     }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
-            connectView?.visibility == View.VISIBLE -> moveTaskToBack(true)
-            webView?.canGoBack() == true -> webView?.goBack()
-            webView?.url?.startsWith("http") == true -> showConnectScreen()
-            else -> moveTaskToBack(true)
+            connectView?.visibility == View.VISIBLE -> {
+                Log.i(TAG, "BACK: 连接屏 → 退到后台（隧道保持）")
+                moveTaskToBack(true)
+            }
+            webView?.canGoBack() == true -> {
+                Log.i(TAG, "BACK: 网页历史回退 url=${webView?.url}")
+                webView?.goBack()
+            }
+            webView?.url?.startsWith("http") == true -> {
+                Log.i(TAG, "BACK: 无历史 → 回连接屏")
+                showConnectScreen()
+            }
+            else -> {
+                Log.i(TAG, "BACK: 非网页状态 → 退到后台 url=${webView?.url}")
+                moveTaskToBack(true)
+            }
         }
     }
 
@@ -1317,6 +1371,7 @@ class MainActivity : Activity() {
 
     /** 断开连接：停隧道、清回连 URL、回连接屏。 */
     private fun disconnectCurrent() {
+        Log.i(TAG, "disconnectCurrent: 关隧道 + 删 prefs[url] + 载入 about:blank")
         closeCurrentTunnel()
         prefs.edit().remove("url").apply()
         sshTokenAck = false
@@ -1333,6 +1388,11 @@ class MainActivity : Activity() {
         disconnectButton?.visibility = if (tunneled) View.VISIBLE else View.GONE
         backToWebButton?.visibility =
             if (tunneled && webView?.url?.startsWith("http") == true) View.VISIBLE else View.GONE
+        // 「回到网页 / 断开连接」的可见性此前不可观测：连接失败后按钮残留
+        // （指向死隧道）就是这类问题，只能靠截图发现。
+        Log.i(TAG, "refreshConnectState: tunneled=$tunneled webUrl=${webView?.url} " +
+            "backToWeb=${backToWebButton?.visibility == View.VISIBLE} " +
+            "disconnect=${disconnectButton?.visibility == View.VISIBLE}")
         // 回到连接屏时清掉残留的进度文案（「连接中… http://127.0.0.1:端口」既过时又是术语）。
         // 隧道不在时不覆盖调用方刚设的错误提示。
         if (tunneled) status("已连上电脑")
@@ -1341,6 +1401,7 @@ class MainActivity : Activity() {
     /** 回到连接屏统一收口：一律停在 Step 2，并复位 Step3 的进度行。
      *  Step3 是上一轮连接的残留，直接显示会出现「连接中…」却早已连上的矛盾画面。 */
     private fun showConnectScreen() {
+        Log.i(TAG, "showConnectScreen: 回连接屏 Step2（tunnel=${(application as DshApp).sshTunnel != null}）")
         step1Card?.visibility = View.GONE
         stepGuideCard?.visibility = View.GONE
         stepGuideStep2?.visibility = View.VISIBLE

@@ -212,7 +212,10 @@ class TuiActivity : Activity() {
             *keyArgs,
             "$user@$host"
         )
-        Log.i(TAG, "dbclient: args=${args.toList()} env=${env?.map { it.take(8) + "…" } ?: "key"}")
+        // 只记 env 的**键名**，不记值：DROPBEAR_PASSWORD 的值就是登录密码。
+        // （原写法 `it.take(8)` 恰好只截到 "DROPBEAR" 这个键名而侥幸没泄漏密码，
+        //  但缩短键名/换认证方式就会漏 —— 不能靠运气。）
+        Log.i(TAG, "dbclient: args=${args.toList()} envKeys=${env?.map { it.substringBefore('=') } ?: "key"}")
 
         statusView?.text = "连接 $user@$host:$port …"
         val client = object : TerminalSessionClient {
