@@ -615,20 +615,21 @@ class MainActivity : Activity() {
         val passRow = pwdRow(sshPassInput)
         step2Card!!.addView(passRow, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        // 高级设置（折叠）：dsh 端口 + 私钥登录
-        val privateKeySection = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
-
-        privateKeySection.addView(label("dsh 端口"), rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
+        // dsh 端口：与 SSH 无关，但属于「怎么连上电脑的 dsh」，常显不折叠
+        step2Card!!.addView(label("dsh 端口"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
         val sshTargetPortInput = input(
             "3080",
             (savedSsh?.optInt("remotePort", DEFAULT_PORT.toInt()) ?: DEFAULT_PORT.toInt()).toString(),
             number = true
         )
-        privateKeySection.addView(sshTargetPortInput, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        privateKeySection.addView(stepHint("dsh 网页的端口，默认 3080，一般不用改。"),
+        step2Card!!.addView(sshTargetPortInput, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        step2Card!!.addView(stepHint("dsh 网页的端口，默认 3080，一般不用改。"),
             rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
-        privateKeySection.addView(label("登录方式"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        // 高级设置（折叠）：登录方式 / 私钥
+        val privateKeySection = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+
+        privateKeySection.addView(label("登录方式"), rowParams(width = ViewGroup.LayoutParams.MATCH_PARENT))
         val authPassBtn = segment("密码", true)
         val authKeyBtn = segment("私钥", false)
         val authGroup = RadioGroup(this@MainActivity).apply {
