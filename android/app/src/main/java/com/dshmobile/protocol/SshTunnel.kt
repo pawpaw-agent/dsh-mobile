@@ -1,7 +1,6 @@
 package com.dshmobile.protocol
 
 import android.util.Log
-import org.json.JSONObject
 import java.io.Closeable
 import java.io.File
 import java.net.InetSocketAddress
@@ -43,9 +42,9 @@ class SshTunnel(
     /**
      * 本地转发端口候选（按序取第一个空闲的）。**必须稳定**，理由见 [pickFreePort]。
      *
-     * 默认是给 WebView 用的 [PORT_CANDIDATES]（3080 优先）；后台监控服务
-     * （AgentMonitorService）不关心 origin，传 [MONITOR_PORT_CANDIDATES] 主动
-     * 让出 3080，免得两边抢端口、有一方退到 13080 后 origin 分家。
+     * 默认 [PORT_CANDIDATES]（3080 优先）。目前只有 DshApp 一处调用
+     * （[com.dshmobile.app.DshApp.ensureTunnel]），WebView 与后台通知共用同一条
+     * 隧道，因此进程内就是一个端口。
      */
     private val preferredPorts: List<Int> = PORT_CANDIDATES,
 ) : Closeable {
@@ -90,6 +89,10 @@ class SshTunnel(
         }.apply { isDaemon = true; name = "ssh-tunnel-watchdog"; start() }
         return localPort
     }
+
+    /** 隧道是否可用（进程存活 + 本地端口在监听）。供复用判定：DshApp 只在
+     *  「配置未变且健康」时把已有隧道交给下一个调用方，否则重建。 */
+    fun isHealthy(): Boolean = isAlive()
 
     private fun isAlive(): Boolean {
         val p = proc ?: return false
@@ -292,27 +295,9 @@ class SshTunnel(
          *  默认端口一致，被占时退到 13080。端口必须稳定，理由见 [pickFreePort]。 */
         val PORT_CANDIDATES = listOf(3080, 13080)
 
-        /** 后台监控服务用的候选：主动让出 3080 给 WebView（它不关心 origin）。 */
-        val MONITOR_PORT_CANDIDATES = listOf(13080, 3080)
-
         /** dbclient 可执行文件路径：由 DshApp.onCreate 注入（nativeLibraryDir/libdbclient.so）。 */
         @Volatile
         var binPath: String? = null
 
-        /** 从连接屏 JSON 配置构造（host/port/user/auth 持久化在 SharedPreferences）。 */
-        fun fromJson(o: JSONObject): SshTunnel {
-            val authType = o.optString("authType", "password")
-            val auth = if (authType == "key") {
-                Auth.KeyPair(File(o.getString("keyPath")), o.optString("keyPass").ifEmpty { null })
-            } else Auth.Password(o.getString("password"))
-            return SshTunnel(
-                sshHost = o.getString("sshHost"),
-                sshPort = o.optInt("sshPort", 22),
-                sshUser = o.getString("sshUser"),
-                remoteHost = o.optString("remoteHost", "127.0.0.1"),
-                remotePort = o.optInt("remotePort", 3080),
-                auth = auth
-            )
-        }
     }
 }

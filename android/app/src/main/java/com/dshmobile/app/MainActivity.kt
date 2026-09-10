@@ -61,6 +61,28 @@ class MainActivity : Activity() {
     private var errorView: View? = null
     private var progressBar: ProgressBar? = null
     private var lastUrl: String? = null
+
+    /**
+     * 隧道事件订阅。隧道由 DshApp 统一持有，回调改为广播，本 Activity 只订阅。
+     * onDestroy 必须反注册（观察者持有 Activity 引用）。
+     */
+    private val tunnelObserver = object : DshApp.TunnelObserver {
+        override fun onTunnelState(state: String) {
+            // 刻意不写状态条：guided 流程用 ①②③ 表达进度，这里的
+            // connecting/connected 属内部状态（曾显示为「隧道: connected」，是术语）。
+            // 需要排查时看 DshApp 的日志。
+        }
+
+        override fun onTunnelBaseChanged(base: String) {
+            runOnUiThread {
+                lastUrl = base
+                prefs.edit().putString("url", base).apply()
+                // 本地基址变了 → cookie 失效，必须重新走 token 交换
+                sshTokenAck = false
+                connectWeb(base)
+            }
+        }
+    }
     private var pendingAuth: HttpAuthHandler? = null
     private var statusView: TextView? = null
     private var sshKeyPathInput: EditText? = null
@@ -279,6 +301,7 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
         setContentView(root)
         applyImmersive()
+        (application as DshApp).addTunnelObserver(tunnelObserver)
 
         // 自动连接（仅 SSH 模式）：存在完整 SSH 配置即恢复隧道 + 加载回环 URL；
         // 否则停留在连接屏。直连模式已移除。
@@ -305,60 +328,31 @@ class MainActivity : Activity() {
         val savedSsh = prefs.getString("ssh_json", null)?.let {
             try { JSONObject(it) } catch (_: Exception) { null }
         } ?: run { connectView?.visibility = View.VISIBLE; return }
-        val host = savedSsh.optString("sshHost")
-        val user = savedSsh.optString("sshUser")
-        if (host.isBlank() || user.isBlank()) { connectView?.visibility = View.VISIBLE; return }
-        val port = savedSsh.optInt("sshPort", 22)
-        val remotePort = savedSsh.optInt("remotePort", DEFAULT_PORT.toInt())
+        if (savedSsh.optString("sshHost").isBlank() || savedSsh.optString("sshUser").isBlank()) {
+            connectView?.visibility = View.VISIBLE; return
+        }
         val app = application as DshApp
         // 用户可能已在连接屏手动点了「连接」：自动恢复不抢占
         if (!beginConnect()) return
         status("自动重建 SSH 隧道…")
         connectView?.visibility = View.VISIBLE
         Thread {
-            val auth = if (savedSsh.optString("authType", "password") == "key") {
-                val keyPath = savedSsh.optString("keyPath", "")
-                if (keyPath.isBlank()) {
-                    runOnUiThread { status("SSH 私钥路径为空，请在连接屏重新配置"); endConnect() }
-                    return@Thread
-                }
-                SshTunnel.Auth.KeyPair(
-                    java.io.File(keyPath),
-                    savedSsh.optString("keyPass").ifEmpty { null }
-                )
-            } else {
-                SshTunnel.Auth.Password(savedSsh.optString("password", ""))
+            val keyPath = savedSsh.optString("keyPath", "")
+            if (savedSsh.optString("authType", "password") == "key" && keyPath.isBlank()) {
+                runOnUiThread { status("私钥路径为空，请到连接屏重新填写"); endConnect() }
+                return@Thread
             }
-            // 旧隧道先关（重复启动/切模式的泄漏点）
-            closeCurrentTunnel()
-            val tunnel = SshTunnel(
-                sshHost = host, sshPort = port, sshUser = user,
-                remoteHost = savedSsh.optString("remoteHost", "127.0.0.1"),
-                remotePort = remotePort,
-                auth = auth
-            )
-            tunnel.onStateChange = { s -> runOnUiThread { status("隧道: $s") } }
-            tunnel.onLocalBaseChanged = { newBase ->
-                runOnUiThread {
-                    lastUrl = newBase
-                    prefs.edit().putString("url", newBase).apply()
-                    // 重连换了本地端口：cookie 已失效，必须用 token 重新认证
-                    sshTokenAck = false
-                    connectWeb(newBase)
-                }
-            }
-            tunnel.start()
-            val base = tunnel.localBaseUrl
+            // 非强制：后台服务可能已经用同一份配置建好了隧道，直接复用（不必重拨）
+            val tunnel = app.ensureTunnel(savedSsh, force = false)
+            val base = tunnel?.localBaseUrl
             // 失败先退：隧道没起来就不再干跑 token 探测（4×8s 白等）
-            if (base == null) {
-                tunnel.close()
+            if (tunnel == null || base == null) {
                 runOnUiThread { status("自动连接失败，请在连接屏手动重试"); refreshConnectState(); endConnect() }
                 return@Thread
             }
             // 自动获取最新 token（服务重启后旧 token 失效；失败静默回退）
             autoFetchToken(tunnel)
             runOnUiThread {
-                app.sshTunnel = tunnel
                 prefs.edit().putString("url", base).apply()
                 connectView?.visibility = View.GONE
                 lastUrl = base
@@ -969,35 +963,21 @@ class MainActivity : Activity() {
         status("SSH 隧道建立中… $sshUser@$sshHost")
         guideStep3Show()
         val app = application as DshApp
+        val cfg = sshConfigJson(sshHost, sshPort, sshUser, remotePort, auth)
         Thread {
-            // 旧隧道先关（重复连接/模式切换的泄漏点）
-            closeCurrentTunnel()
-            val tunnel = SshTunnel(
-                sshHost = sshHost, sshPort = sshPort, sshUser = sshUser,
-                remoteHost = "127.0.0.1", remotePort = remotePort,
-                auth = auth
-            )
-            tunnel.onStateChange = { s -> runOnUiThread { status("隧道: $s") } }
-            tunnel.onLocalBaseChanged = { newBase ->
-                runOnUiThread {
-                    // 重连换了本地端口：cookie 失效，必须用 token 重新认证
-                    sshTokenAck = false
-                    connectWeb(newBase)
-                }
-            }
-            tunnel.start()
-            val base = tunnel.localBaseUrl
+            // 用户明确点了连接 → 强制重建（可能正是一条他自己觉得有问题的隧道）
+            val tunnel = app.ensureTunnel(cfg, force = true)
+            val base = tunnel?.localBaseUrl
             // 失败先退：隧道没起来就不再干跑 token 探测（4×8s 白等）
-            if (base == null) {
-                tunnel.close()
+            if (tunnel == null || base == null) {
                 runOnUiThread {
                     status("隧道建立失败（检查 SSH 主机/端口/用户/认证）")
                     // 提示词跟登录方式：私钥用户看到「检查密码」会懵
                     val what = if (auth is SshTunnel.Auth.KeyPair) "私钥" else "密码"
                     guideLineFail(1, "① 检查电脑 ✗ 连不上你的电脑（检查地址/账号/$what）")
                     guideLine(2, "② 建立安全通道 未开始", running = true)
-                    // 旧隧道已在上面的 closeCurrentTunnel() 关掉，这里必须刷新，
-                    // 否则「回到网页 / 断开连接」会留在屏幕上指向一个已死的隧道
+                    // ensureTunnel 已把旧隧道关掉，这里必须刷新，否则
+                    // 「回到网页 / 断开连接」会留在屏幕上指向一个已死的隧道
                     refreshConnectState()
                     endConnect()
                 }
@@ -1010,7 +990,6 @@ class MainActivity : Activity() {
                 if (token != null) guideLineDone(2, "② 建立安全通道 ✓ 已连通")
                 else guideLineFail(2, "② 建立安全通道 ⚠ 未获取令牌，仍尝试打开")
                 persistSshConfig(sshHost, sshPort, sshUser, remotePort, auth)
-                app.sshTunnel = tunnel
                 sshTokenAck = false
                 connectWeb(base)
                 refreshConnectState()
@@ -1019,25 +998,35 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    /** SSH 配置 → JSON。持久化与建隧道共用一份，避免两边字段走样。
+     *  同时也是 DshApp.ensureTunnel 判定「能否复用已有隧道」的输入。 */
+    private fun sshConfigJson(
+        sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, auth: SshTunnel.Auth
+    ): JSONObject {
+        val json = JSONObject()
+            .put("sshHost", sshHost)
+            .put("sshPort", sshPort)
+            .put("sshUser", sshUser)
+            .put("remoteHost", "127.0.0.1")
+            .put("remotePort", remotePort)
+        when (auth) {
+            is SshTunnel.Auth.Password ->
+                json.put("authType", "password").put("password", auth.password)
+            is SshTunnel.Auth.KeyPair ->
+                json.put("authType", "key")
+                    .put("keyPath", auth.privateKeyFile.absolutePath)
+                    .put("keyPass", auth.passphrase ?: "")
+        }
+        return json
+    }
+
     private fun persistSshConfig(
         sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, auth: SshTunnel.Auth
     ) {
         try {
-            val json = JSONObject()
-                .put("sshHost", sshHost)
-                .put("sshPort", sshPort)
-                .put("sshUser", sshUser)
-                .put("remoteHost", "127.0.0.1")
-                .put("remotePort", remotePort)
-            when (auth) {
-                is SshTunnel.Auth.Password ->
-                    json.put("authType", "password").put("password", auth.password)
-                is SshTunnel.Auth.KeyPair ->
-                    json.put("authType", "key")
-                        .put("keyPath", auth.privateKeyFile.absolutePath)
-                        .put("keyPass", auth.passphrase ?: "")
-            }
-            prefs.edit().putString("ssh_json", json.toString()).apply()
+            prefs.edit()
+                .putString("ssh_json", sshConfigJson(sshHost, sshPort, sshUser, remotePort, auth).toString())
+                .apply()
         } catch (_: Exception) {}
     }
 
@@ -1223,6 +1212,11 @@ class MainActivity : Activity() {
         refreshConnectState()
     }
 
+    override fun onDestroy() {
+        (application as? DshApp)?.removeTunnelObserver(tunnelObserver)
+        super.onDestroy()
+    }
+
     override fun onPause() {
         super.onPause()
         webView?.onPause(); webView?.pauseTimers()
@@ -1342,11 +1336,9 @@ class MainActivity : Activity() {
         stepGuideCard?.visibility = View.GONE
     }
 
-    /** 关闭并释放当前 SSH 隧道（无则 no-op）。 */
+    /** 关闭并释放当前 SSH 隧道（无则 no-op）。所有权在 DshApp，这里只是转发。 */
     private fun closeCurrentTunnel() {
-        val app = application as DshApp
-        app.sshTunnel?.close()
-        app.sshTunnel = null
+        (application as DshApp).closeTunnel()
     }
 
     /** 断开连接：停隧道、清回连 URL、回连接屏。 */

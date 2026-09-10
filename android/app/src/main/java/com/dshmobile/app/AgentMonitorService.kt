@@ -15,7 +15,6 @@ import android.util.Log
 import com.dshmobile.protocol.DshClient
 import com.dshmobile.protocol.Models
 import com.dshmobile.protocol.Rpc
-import com.dshmobile.protocol.SshTunnel
 import org.json.JSONObject
 
 /**
@@ -26,6 +25,9 @@ import org.json.JSONObject
  *
  * 纯 WebView 版也使用：服务持有自己的轻量 [DshClient] 实例，
  * 只消费 host downlink。App 回前台即停服务，避免与页面重复耗电。
+ *
+ * SSH 隧道不由本服务持有：通过 [DshApp.ensureTunnel] 取用（WebView 那条在就复用，
+ * 同一进程只允许一条 dbclient / 一个本地端口）。服务停止时**不关隧道**。
  *
  * 停止竞态（实测 1.5.2 踩中 ForegroundServiceDidNotStartInTimeException）：
  * 禁止外部 stopService —— startForegroundService 的 5s 窗口内（服务尚未执行
@@ -40,7 +42,6 @@ import org.json.JSONObject
 class AgentMonitorService : Service() {
 
     private var client: DshClient? = null
-    private var sshTunnel: SshTunnel? = null
     private val lastRunning = HashMap<String, Boolean>()
     private var foregroundStarted = false
     private val connectStarted = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -147,46 +148,27 @@ class AgentMonitorService : Service() {
             return
         }
         val cfg = rawSsh?.let { try { JSONObject(it) } catch (_: Exception) { null } }
-        val host = cfg?.optString("sshHost") ?: ""
-        val user = cfg?.optString("sshUser") ?: ""
-        if (cfg == null || host.isBlank() || user.isBlank()) {
+        if (cfg == null || cfg.optString("sshHost").isBlank() || cfg.optString("sshUser").isBlank()) {
             startMonitor(DshClient(base, launchToken))
             return
         }
-        val tunnel = SshTunnel(
-            sshHost = host,
-            sshPort = cfg.optInt("sshPort", 22),
-            sshUser = user,
-            remoteHost = cfg.optString("remoteHost", "127.0.0.1"),
-            remotePort = cfg.optInt("remotePort", 3080),
-            auth = if (cfg.optString("authType", "password") == "key") {
-                val keyPath = cfg.optString("keyPath", "")
-                if (keyPath.isBlank()) {
-                    startMonitor(DshClient(base, launchToken))
-                    return
-                }
-                SshTunnel.Auth.KeyPair(java.io.File(keyPath), cfg.optString("keyPass").ifEmpty { null })
-            } else SshTunnel.Auth.Password(cfg.optString("password", "")),
-            // 监控只走 HTTPS 客户端，不涉及 WebView 的 origin → 主动让出 3080
-            preferredPorts = SshTunnel.MONITOR_PORT_CANDIDATES,
-        )
         Thread {
-            tunnel.start()
-            val local = tunnel.localBaseUrl
+            // 向 DshApp 要隧道：WebView 那条还在就复用（同一实例，不再多起一条
+            // dbclient、不再占第二个端口）；终端模式下没有隧道时才新建。
+            // 非强制 → 配置未变且健康就直接复用。
+            val tunnel = (application as DshApp).ensureTunnel(cfg, force = false)
+            val local = tunnel?.localBaseUrl
             if (local == null) {
-                tunnel.close()
+                Log.w(TAG, "无可用隧道，停止监听")
                 stopSelf()
                 return@Thread
             }
-            // ⚠️ 不写 prefs["url"]：那是 WebView 的回连地址（含固定 3080 端口，origin 敏感）。
-            // 监控隧道用另一个端口，写进去会让下次启动的 baseMatch 判断失配、白白重连一次。
-            startMonitor(DshClient(local, launchToken), tunnel)
+            startMonitor(DshClient(local, launchToken))
         }.start()
     }
 
-    private fun startMonitor(c: DshClient, tunnel: SshTunnel? = null) {
+    private fun startMonitor(c: DshClient) {
         client = c
-        sshTunnel = tunnel
         c.setHostListener { _, payload ->
             if (payload.optString("type") != "host/session-status") return@setHostListener
             val sid = payload.optString("sessionId")
@@ -228,8 +210,7 @@ class AgentMonitorService : Service() {
         (application as? DshApp)?.unregisterActivityLifecycleCallbacks(selfStopCallbacks)
         client?.stop()
         client = null
-        try { sshTunnel?.close() } catch (_: Exception) {}
-        sshTunnel = null
+        // ⚠️ 不关 SSH 隧道：它归 DshApp 所有，WebView 那条还要继续用
         Log.i(TAG, "onDestroy")
         super.onDestroy()
     }
