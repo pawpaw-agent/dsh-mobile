@@ -670,7 +670,11 @@ class MainActivity : Activity() {
             passBlock.visibility = if (key) View.GONE else View.VISIBLE
             keyBlock.visibility = if (key) View.VISIBLE else View.GONE
         }
-        authGroup.setOnCheckedChangeListener { _, _ -> syncAuthFields() }
+        authGroup.setOnCheckedChangeListener { _, _ ->
+            syncAuthFields()
+            // 切登录方式后旧的校验错误会跟当前状态矛盾（如已是密码模式却提示「请填写私钥路径」）
+            status("")
+        }
         syncAuthFields()
 
         // dsh 端口：dsh 网页在你电脑上的端口
