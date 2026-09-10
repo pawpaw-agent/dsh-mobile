@@ -37,4 +37,9 @@ GPL-3.0。SSH 终端模式集成 Termux [terminal-view](https://github.com/termu
 
 ---
 
-**SHA-256**（`dsh-handheld-0.1.4.apk`）：构建产物校验后填入。
+**SHA-256**（`dsh-handheld-0.1.4.apk`，2,087,746 字节）：`430024d3d61fd363c3e4f159632b3fa7ddb3cd3c8568b344470dd60a821fc624`
+
+发布前已在产物上核对：`versionCode=31` / `versionName=0.1.4` / `android:debuggable` 缺失（= false）；
+`assets/plugins/dsh-web-mobile-client.js` 的 md5 为 `5037d9d78a6eadf5e397a7fe557985f6`（即打过 P1 补丁的那份，
+与本仓库文件逐字节一致）；v2 签名证书与 0.1.3 完全相同（序列号 `0xdda8efbf…`，
+指纹 `a9401663c90066dddd619167fb2b4452d28fae2f187ea4a967214d08607b78e7`），故可直接覆盖安装。
