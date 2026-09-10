@@ -568,6 +568,8 @@ class MainActivity : Activity() {
             webMode = web
             paintWeb(web)
             paintTerm(!web)
+            // 主按钮文案跟模式：创建早于 connectMainBtn，故用可空调用
+            connectMainBtn?.text = if (web) "连上并打开 dsh 网页" else "连上并打开终端"
         }
         webModeCard.setOnClickListener { selectMode(true) }
         termModeCard.setOnClickListener { selectMode(false) }
@@ -705,6 +707,7 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(dp(88), dp(46)).apply { marginEnd = dp(6) })
         connectMainBtn = Button(this@MainActivity).apply {
             isAllCaps = false
+            text = if (webMode) "连上并打开 dsh 网页" else "连上并打开终端"
             setTextColor(COL_ACCENT_TEXT)
             setBackgroundResource(R.drawable.bg_button_primary)
             setOnClickListener {
