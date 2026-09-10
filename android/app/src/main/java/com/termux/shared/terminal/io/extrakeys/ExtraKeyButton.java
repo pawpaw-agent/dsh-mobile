@@ -30,7 +30,7 @@ public class ExtraKeyButton {
     /** The key name for the nested dict to define popup extra key info if using a dict to define the extra key. {popup: {key: name, ...}, ...} */
     public static final String KEY_POPUP = "popup";
 
-    /** The key name for the number of rows this button should span if using a dict. {rowSpan: 2, ...} Defaults to 1. (dsh-mobile extension) */
+    /** The key name for the number of rows this button should span if using a dict. {rowSpan: 2, ...} Defaults to 1. (dsh-handheld extension) */
     public static final String KEY_ROW_SPAN = "rowSpan";
 
 

@@ -2,8 +2,8 @@
 """Push a small set of file updates to github.com via the git-database API.
 
 Used when the git:// https transport is unreliable (TLS resets).
-Creates one commit with the given file contents on top of current main.
-Usage: python3 push-via-api.py FILE1 [FILE2 ...]
+Creates one commit on top of current main.
+Usage: python3 push-via-api.py [--delete PATH]... [--message MSG] FILE1 [FILE2 ...]
 """
 import base64
 import json
@@ -12,7 +12,7 @@ import subprocess
 import sys
 import urllib.request
 
-REPO = "pawpaw-agent/dsh-mobile"
+REPO = "pawpaw-agent/dsh-handheld"
 API = f"https://api.github.com/repos/{REPO}"
 TOKEN = subprocess.check_output(["gh", "auth", "token"], text=True).strip()
 
@@ -49,15 +49,35 @@ def tree_of(commit_sha):
 
 
 def main():
-    files = sys.argv[1:]
-    if not files:
-        raise SystemExit("usage: push-via-api.py FILE...")
+    args = sys.argv[1:]
+    if not args:
+        raise SystemExit("usage: push-via-api.py [--delete PATH]... [--message MSG] FILE...")
+    deletes = []
+    msg = None
+    files = []
+    while args:
+        a = args.pop(0)
+        if a == "--delete":
+            deletes.append(args.pop(0))
+        elif a == "--message":
+            msg = args.pop(0)
+        else:
+            files.append(a)
+    if not files and not deletes:
+        raise SystemExit("nothing to push")
 
     ref = gh("GET", f"{API}/git/ref/heads/main")
     head_sha = ref["object"]["sha"]
     print(f"main @ {head_sha}")
 
     all_entries = tree_of(head_sha)
+    if msg is None:
+        msg = "chore: push changed files via the git-database API\n\nCo-Authored-By: push-via-api (git transport unreliable on this host)"
+
+    # verify deletes exist in the target tree
+    for f in deletes:
+        if f not in all_entries:
+            raise SystemExit(f"delete target not on remote: {f}")
 
     # 1. create blobs for the changed files
     new_sha = {}
@@ -73,6 +93,11 @@ def main():
     for f in files:
         d, name = os.path.split(f)
         by_dir.setdefault(d, []).append((name, new_sha[f]))
+    for f in deletes:
+        d, name = os.path.split(f)
+        by_dir.setdefault(d, [])
+        if (name, None) not in [(n, s) for n, s in by_dir[d]]:
+            by_dir[d].append((name, None))
 
     # directories to rebuild: dirs of changed files plus all ancestors, deepest first
     dirs = set()
@@ -90,8 +115,11 @@ def main():
     build = {}
     for d in order:
         entries = []
+        added = set()
         prefix = d + "/" if d else ""
         for path, (mode, typ, sha) in all_entries.items():
+            if path in deletes:
+                continue
             if os.path.dirname(path) == d:
                 base = os.path.basename(path)
                 sub = os.path.join(d, base) if d else base
@@ -101,8 +129,17 @@ def main():
                     typ = "tree"
                     mode = "040000"
                 entries.append({"path": base, "mode": mode, "type": typ, "sha": sha})
+                added.add(base)
         for name, sha in by_dir.get(d, []):
+            if sha is None:
+                # deletion: skip this entry so it drops out of the rebuilt tree
+                continue
             entries.append({"path": name, "mode": "100644", "type": "blob", "sha": sha})
+        # New subtrees built in this run whose parent is d but that did NOT exist
+        # on the remote (so the all_entries loop above never saw them): attach now.
+        for sub in sorted(build):
+            if os.path.dirname(sub) == d and os.path.basename(sub) not in added:
+                entries.append({"path": os.path.basename(sub), "mode": "040000", "type": "tree", "sha": build[sub]})
         t = gh("POST", f"{API}/git/trees", {"tree": entries})
         build[d] = t["sha"]
         print(f"tree {'/' if d == '' else d} -> {t['sha'][:8]}")
@@ -110,7 +147,6 @@ def main():
     root = build[""]
 
     # 3. create commit
-    msg = "security: allowBackup=false — P1: SSH password/token must not be exfiltrated via backup\n\nCo-Authored-By: push-via-api (git transport unreliable on this host)"
     c = gh("POST", f"{API}/git/commits", {
         "message": msg,
         "tree": root,

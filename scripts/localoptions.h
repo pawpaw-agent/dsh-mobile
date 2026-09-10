@@ -1,9 +1,9 @@
 /*
- * dsh-mobile localoptions.h for Dropbear dbclient (Android).
+ * dsh-handheld localoptions.h for Dropbear dbclient (Android).
  *
  * Based on the MIT-licensed localoptions.h from ribbons/android-dropbear
  * (https://github.com/ribbons/android-dropbear, SPDX-License-Identifier: MIT),
- * adjusted for the dsh-mobile use case:
+ * adjusted for the dsh-handheld use case:
  *   - Client auth via the DROPBEAR_PASSWORD environment variable. The
  *     cli-auth.c patch (scripts/build-dropbear.sh) makes getenv() the only
  *     password path (getpass() doesn't exist on Android), so credentials

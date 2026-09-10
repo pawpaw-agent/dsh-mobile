@@ -1,9 +1,9 @@
-package com.dshmobile.app
+package com.dshhandheld.app
 
 import android.app.Application
 import android.util.Log
 import android.webkit.WebView
-import com.dshmobile.protocol.SshTunnel
+import com.dshhandheld.protocol.SshTunnel
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList

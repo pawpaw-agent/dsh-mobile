@@ -1,6 +1,6 @@
 {
-  "name": "dsh-mobile",
-  "version": "1.4.0",
+  "name": "dsh-handheld",
+  "version": "0.1.2",
   "private": true,
-  "description": "DeepSeek Harness pure-WebView Android client — WebView + SSH tunnel, with background completion notifications"
+  "description": "DeepSeek Harness (dsh) Android client — full dsh web UI in a WebView over an SSH tunnel, plus a terminal mode"
 }

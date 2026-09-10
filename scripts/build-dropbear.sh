@@ -3,7 +3,7 @@
 #
 # Based on the MIT-licensed build script from ribbons/android-dropbear
 # (https://github.com/ribbons/android-dropbear, SPDX-License-Identifier: MIT)
-# — adjusted for the dsh-mobile project (single arm64 target, dbclient only).
+# — adjusted for the dsh-handheld project (single arm64 target, dbclient only).
 #
 # Usage:
 #   ANDROID_NDK_HOME=/path/to/ndk ./scripts/build-dropbear.sh

@@ -1,11 +1,11 @@
-package com.dshmobile.app
+package com.dshhandheld.app
 
 import android.view.View
 import com.termux.shared.terminal.io.TerminalExtraKeys
 import com.termux.view.TerminalView
 
 /**
- * dsh-mobile 版 [TerminalExtraKeys]：复用 Termux 官方 extra-keys 派发，
+ * dsh-handheld 版 [TerminalExtraKeys]：复用 Termux 官方 extra-keys 派发，
  * 仅拦截非终端键：
  *  - KEYBOARD —— 收/呼软键盘（Termux 同款行为）
  * 其余键（ESC/TAB/CTRL/ALT/方向键/HOME/END/PGUP/PGDN/普通字符）交给

@@ -15,5 +15,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "DshMobile"
+rootProject.name = "DshHandheld"
 include(":app")

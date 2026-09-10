@@ -1,176 +1,159 @@
-# dsh-mobile
+# dsh-handheld
 
-**手机端使用 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）的纯 WebView Android 客户端。**
+**把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）装进口袋的 Android 客户端。**
 
-连接运行在你笔记本 / VPS 上的 `dsh --profile web`：
-
-- **完整网页（默认，也是唯一界面）** — 全屏 WebView 加载 dsh web 前端，功能与桌面 100% 一致（Markdown / 代码高亮 / 设置页 / 会话树……）。内置 `crypto.randomUUID` 文档启动注入（局域网明文 HTTP 防白屏）、Basic Auth 弹窗、错误重试页、WebView 跨重建保活。
-- **SSH 隧道** — 内置 dbclient（dropbear）进程式本地端口转发，服务端视角为回环，**解锁设置/凭据等本机限制接口**（官方认可的合规远程完整方案），无需 `dsh-lan-access` 插件、无需 `--host 0.0.0.0`；支持密码登录、私钥登录（含口令），SSH 断线自动重连，App 重启后自动重建隧道。
+完整 dsh Web 界面 + 内置 SSH 隧道 + 终端模式。服务端**零改动**——不需要装任何 dsh 插件，不需要 `--host 0.0.0.0`。
 
 ```
-┌─────────────────────────────┐
-│        dsh-mobile           │
-│     完整网页(WebView)       │
-│   SSH 隧道 / 局域网直连      │
-└──────────────┬──────────────┘
-               │  http://<host>:3080
-               │  局域网 / Tailscale / 隧道 / SSH 转发
-               ▼
-┌─────────────────────────────┐
-│        dsh web              │
-│  (dsh --profile web)        │
-│  运行在你的笔记本 / VPS     │
-│  默认 http://<host>:3080    │
-└──────────────┬──────────────┘
-               │
-               ▼
-┌─────────────────────────────┐
-│   DeepSeek Harness Agent    │
-│   你自己的 key，你自己的配置 │
-└─────────────────────────────┘
+┌──────────────────────────────┐
+│        dsh-handheld          │
+│                              │
+│  ① 看网页（全屏 WebView）    │
+│  ② 打开终端（远程 shell）    │
+│                              │
+│  内置 SSH 隧道（dbclient）   │
+└───────────────┬──────────────┘
+                │  隧道后访问 http://127.0.0.1:3080
+                │  （服务端视角 = 本机回环）
+                ▼
+┌──────────────────────────────┐
+│          dsh web             │
+│    （dsh --profile web）     │
+│    运行在你的笔记本 / VPS    │
+└───────────────┬──────────────┘
+                ▼
+┌──────────────────────────────┐
+│    DeepSeek Harness Agent    │
+│   你自己的 key、自己的配置   │
+└──────────────────────────────┘
 ```
+
+---
+
+## 为什么用 SSH 隧道
+
+DSH 出于安全设计，把**配置平面**（设置页、凭据管理、模型探测、目录选择等）**硬性限制为仅本机回环可访问**。从局域网 IP 访问这些接口会返回 `HTTP 403`——这是官方的安全边界（`PRIVILEGED_METHODS`），本项目不绕过它。
+
+SSH 本地端口转发让服务端**仍然认为请求来自本机**，因此是**唯一既能远程使用、又不破坏官方安全模型的完整方案**，且自带 SSH 认证。本项目把这个过程内置了：填一次账号密码，App 自己维持隧道。
+
+| | 局域网直连 | **内置 SSH 隧道** |
+|---|---|---|
+| 对话 / 会话 / 工作区 | ✅ | ✅ |
+| 设置页 / 凭据 / 模型探测 | ❌ 403 | ✅ |
+| 额外服务端插件 | 需要 | **不需要** |
+| 认证 | dsh token | **SSH + dsh token（双重）** |
+| 跨网络 | 需 Tailscale 等 | ✅ 只要 SSH 可达 |
 
 ---
 
 ## 功能
 
-- **连接屏** — 黑白极简卡片式连接屏，输入 host:port + 选择 http/https 协议即可连接 dsh web，默认端口 `3080`；SSH 隧道配置持久化，App 重启自动恢复
-- **完整网页** — 所有功能（会话、对话、Markdown/代码高亮、设置页、模型、凭据、工作区等）均由 dsh 官方 Web 前端提供，与桌面端一致
-- **SSH 自动恢复** — SSH 隧道配置持久化；App 重启自动重建，断线重连后 WebView 自动跟随新端口
-- **SSH 私钥导入** — 连接屏支持密码/私钥两种认证，私钥可通过系统文件选择器导入到应用私有目录（含口令）
-- **WebView 加载进度条** — 页面加载时顶部显示一条纤细的白色进度条，不打断沉浸体验
-- **SSH 完成通知** — App 退后台时通过同一 SSH 隧道监听 Agent 完成事件，完成后推通知；回前台自动停止
-- **明文 HTTP 支持** — `usesCleartextTraffic="true"`，支持局域网直连、Tailscale、反向代理、SSH 本地转发
-- **dsh 0.1.2+ 浏览器认证适配** — 连接屏「访问令牌」栏 + 首次 token 换 cookie + 401 自动回退/提示，后台通知服务 `DshClient` 同样带 Cookie 认证
-- **SSH 终端模式** — 经 SSH PTY 通道打开**远程 shell**：基于 Termux 的 [terminal-view](https://github.com/termux/termux-app) 渲染（原生软键盘/IME 交互，非 WebView），底部常驻键排（ESC/TAB/CTRL/方向键/Enter）；进入后是普通远程 shell，**自由输入 dsh-tui 等命令**，不做任何自动启动
-
-> 后台通知服务（`AgentMonitorService`）内部仍使用轻量协议客户端 `DshClient` 监听 `host/session-status`，但 App 界面不包含任何原生业务页面。
+- **看 dsh 网页** — 全屏 WebView 加载 dsh 官方 Web 前端，功能与桌面端一致（Markdown、代码高亮、会话树、设置页、模型管理……）。内置 `crypto.randomUUID` 文档启动注入（防局域网明文 HTTP 下白屏）、跨 Activity 重建的 WebView 保活。
+- **内置 SSH 隧道** — 打包 dropbear `dbclient`（arm64）做进程式本地端口转发，固定使用 `3080`（占用时回退 `13080`）。支持**密码**与**私钥**（含口令，可用系统文件选择器导入）两种认证；断线自动重连，App 重启后自动重建隧道。
+- **打开终端** — 经 SSH PTY 打开远程 shell，用 Termux 的 [terminal-view](https://github.com/termux/termux-app) 原生渲染（真 IME / 软键盘交互，非 WebView），底部常驻键排（ESC / TAB / CTRL / 方向键 / Enter）。进入后就是普通远程 shell，**自由输入 `dsh-tui` 等命令**，不做任何自动启动。
+- **token 全自动** — dsh 0.1.2+ 启用了浏览器 token 认证。SSH 模式下 App 会在服务端自动提取最新 token 并保存，服务重启后无需手动更新；失败时回退到连接屏手动填写。
+- **连接屏刻意去术语** — 只出现「电脑地址 / 登录账号 / 电脑登录密码 / 看 dsh 网页 / 打开终端」，不暴露 SSH、端口、令牌等概念。
 
 ---
 
 ## 快速开始
 
-### 1. 在笔记本 / VPS 上启动 dsh web
+### 1. 在电脑上启动 dsh web
 
 ```sh
 dsh --profile web
 # 默认监听 http://127.0.0.1:3080
-# dsh 0.1.2+ 启动时会打印带浏览器认证 token 的 URL，例如：
-#   dsh web: http://127.0.0.1:3080/?token=1EgfGY... (LAN: http://192.168.x.x:3080/?token=...)
 ```
 
-> **dsh 0.1.2+ 浏览器认证（重要）**：0.1.2 起 dsh web 对页面和 `/api` 启用一次性 token 认证——首次访问必须用启动日志中 `?token=` 的 URL，服务端签发签名 cookie（默认 30 天，可配 `cookieMaxAgeDays` 调长），之后直连干净地址。**服务重启后 token 会变**（cookie 仍有效，只要签名密钥未变）。dsh-mobile 已适配：
-> - 连接屏新增「**访问令牌**」栏，粘贴 `?token=` 后的值；App 首次加载用它换 cookie，之后直连。
-> - **SSH 模式下 token 全自动**：App 连接时在服务端执行 `journalctl -u dsh-web.service` 自动提取最新 token 并保存——服务重启后无需手动更新（失败时回退到已存/手输 token）。
-> - SSH 隧道断线重连后本地端口会变（cookie 按 host:port 绑定而失效），App 会自动用 token 重新认证。
-> - 服务重启后 token 失效时，App 会提示「需要访问令牌」（仅局域网直连模式需手动从日志更新）。
->
-> 获取最新 token（在服务端执行）：
-> ```sh
-> journalctl -u dsh-web.service -n 10 | grep "dsh web"
-> ```
+### 2. 安装 App
 
-> 如果要让手机通过**局域网**访问，需要把服务绑到 `0.0.0.0`。`dsh web` 出于安全考虑**故意拒绝 `--host 0.0.0.0`**，请安装官方认可的 [dsh-lan-access](https://www.npmjs.com/package/dsh-lan-access) 插件：
->
-> ```sh
-> dsh plugin --profile web add dsh-lan-access
-> # 重启 dsh web 生效
-> ```
->
-> 该插件会：将 webserver 的 `host` 改为 `0.0.0.0`；向每次返回的 index.html 注入 `crypto.randomUUID` polyfill（对未装插件的环境是额外保险）；屏幕宽度 ≤820px 时自动切换为紧凑移动排版（正好覆盖手机窄屏）。
+从 [Releases](../../releases) 下载 APK，或自行构建：
 
-### 2. 安装 dsh-mobile
-
-```bash
+```sh
 cd android && ./gradlew assembleDebug
-adb install app/build/outputs/apk/debug/app-debug.apk
+adb install android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-也可以直接从 GitHub Actions 的构建产物（`dsh-mobile-debug-apk` artifact）下载 APK。
+> CI（GitHub Actions）也会构建 debug APK 作为 artifact。
 
 ### 3. 连接
 
-打开 App，在连接屏选择协议（http / https），输入：
-- **Host** — 笔记本的局域网 IP（如 `192.168.1.100`）或 Tailscale IP（如 `100.x.x.x`）或隧道域名
-- **Port** — dsh web 端口，默认 `3080`
-- **访问令牌**（dsh 0.1.2+）— 启动日志 `?token=` 后的值（见上方说明）
+打开 App，选择用途，填写三项即可：
 
-点 **Connect**，App 加载 dsh Web 前端，开始使用。
+| 字段 | 填什么 |
+|---|---|
+| 用途 | **看 dsh 网页**（默认）或 **打开终端** |
+| 电脑地址 | 电脑的局域网 IP（如 `192.168.1.100`）或 Tailscale IP |
+| 登录账号 / 密码 | 你在这台电脑上的 SSH 账号密码（隧道用） |
 
-也可以点连接屏底部的「**SSH 终端（远程 shell）**」进入终端界面（需先启用 SSH 隧道并填写主机/用户名/密码或私钥；进入后是普通远程 shell，需要时手动输入 `dsh-tui` 等命令）。
+点「连接」即可。SSH 隧道由 App 自动建立。
 
 ---
 
 ## 连接方式
 
-| 场景 | 协议 | Host 示例 | 说明 |
-|---|---|---|---|
-| 局域网（推荐） | http | `192.168.1.100` | 同一 WiFi 下直连，需 `dsh-lan-access` 插件绑定 `0.0.0.0` |
-| Tailscale | http | `100.x.x.x` | 跨网络、端到端加密，推荐远程使用 |
-| Cloudflare Tunnel / ngrok | https | `my-dsh.trycloudflare.com` | 端口填 443，选 https 协议 |
-| SSH 端口转发 | http | `127.0.0.1` | 见下方「远程访问限制」 |
-
----
-
-## 远程访问限制（DSH 官方安全设计）
-
-DSH 把**配置平面**——设置页、模型 / Provider 管理、凭据、Agent Preset、目录选择、`llm.discoverModels`（模型探测）等接口——**硬性限制为仅本机回环（127.0.0.1）可访问**。用 `dsh-lan-access` 绑定 `0.0.0.0` 后，这些接口从局域网 IP 访问仍会返回 `HTTP 403`。这是官方的安全边界（`PRIVILEGED_METHODS`），插件有意不绕过。
-
-- **远程正常**：对话、实时进度、会话内模型选择、会话历史、工作区浏览、其余正常 API
-- **远程 403（仅本机回环）**：设置页、凭据管理、Agent Preset 管理、目录选择、`llm.discoverModels`
-
-### 远程需要改设置怎么办
-
-- **日常路径**：在电脑本机（`http://127.0.0.1:3080`）完成模型 / 凭据配置，手机只用于对话、看进度、选模型。
-- **唯一合规的完整方案**：SSH 本地端口转发
-
-  ```sh
-  ssh -L 3080:127.0.0.1:3080 用户@电脑IP
-  ```
-
-  然后手机访问 `http://127.0.0.1:3080`（需把 Host 填 `127.0.0.1`，或在连接屏改地址）。从服务端视角这仍是回环访问（不绕过栅栏），且自带 SSH 认证。
+| 场景 | 说明 |
+|---|---|
+| **同一 WiFi（推荐）** | 填电脑局域网 IP，走内置 SSH 隧道 |
+| **跨网络** | 用 [Tailscale](https://tailscale.com/) 等组网后填其 IP；隧道仍然生效 |
+| **纯局域网直连（不建隧道）** | 功能受限（配置平面 403），需要服务端插件把 dsh 绑到 `0.0.0.0` |
 
 ---
 
 ## 项目结构
 
 ```
-dsh-mobile/
+dsh-handheld/
 ├── android/
-│   ├── app/
-│   │   ├── src/main/
-│   │   │   ├── java/com/dshmobile/
-│   │   │   │   ├── app/
-│   │   │   │   │   ├── MainActivity.kt          # 连接屏/WebView 壳 + SSH 隧道
-│   │   │   │   │   ├── AgentMonitorService.kt   # 后台 Agent 完成通知服务
-│   │   │   │   │   └── DshApp.kt                # Application：持有 WebView / SSH 隧道
-│   │   │   │   └── protocol/
-│   │   │   │       ├── Rpc.kt                   # 四象限 RPC envelope + 错误体
-│   │   │   │       ├── DshClient.kt             # HTTP RPC + 双 WebSocket + 方法目录 + respond
-│   │   │   │       └── Models.kt                # 领域数据类
-│   │   │   ├── AndroidManifest.xml
-│   │   │   └── res/                      # 启动图标 + 主题
-│   │   ├── build.gradle.kts
-│   │   └── debug.keystore               # 固定 debug 签名（CI/本地一致，install -r 覆盖升级）
-│   ├── build.gradle.kts
-│   ├── settings.gradle.kts
-│   └── gradle/wrapper/
+│   └── app/src/main/
+│       ├── java/com/dshhandheld/
+│       │   ├── app/
+│       │   │   ├── MainActivity.kt           # 连接屏 + WebView 壳 + 隧道编排
+│       │   │   ├── TuiActivity.kt            # SSH 终端模式（PTY + Termux 渲染）
+│       │   │   ├── DshTerminalExtraKeys.kt   # 终端底部常驻键排
+│       │   │   └── DshApp.kt                 # Application：持有保活 WebView 与唯一隧道
+│       │   └── protocol/
+│       │       └── SshTunnel.kt              # dbclient 进程 + 端口选择 + 看门狗
+│       ├── assets/plugins/                   # 注入的移动端适配插件（MIT，见下）
+│       ├── jniLibs/arm64-v8a/                # dbclient（CI 阶段构建后放入）
+│       └── AndroidManifest.xml
 ├── scripts/
-│   └── build-apk.sh                     # 封装 gradle assembleDebug
+│   ├── build-dropbear.sh                     # 交叉编译 dropbear dbclient
+│   ├── build-apk.sh
+│   └── push-via-api.py
 ├── docs/
-│   ├── dsh-protocol.md                  # 逆向的 DSH 线上协议规格
-│   └── native-client.md                 # 后台协议客户端/SSH 架构（仅用于完成通知）
-├── package.json
-└── README.md
+│   ├── known-issues.md                       # 已知问题与行为记录
+│   ├── dsh-protocol.md                       # DSH 线上协议逆向规格（历史存档）
+│   └── dsh-plugins-404-fix.md
+├── .github/workflows/ci.yml                  # 构建 dbclient → 构建 APK
+└── package.json
 ```
+
+---
+
+## 移动端界面适配
+
+dsh 官方 Web 前端是桌面布局，窄屏下侧栏会常驻挤占内容。本项目在 **App 侧**注入
+[dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile)（MIT，作者 mexiaosqwq）
+客户端插件来适配——`addDocumentStartJavaScript` 钩住 `__DSH_BOOT__` 启动图，
+`shouldInterceptRequest` 从 APK assets 返回插件 bundle，**服务端不需要装任何插件**。
+
+> 该项目是第三方作品，其许可证见 `android/app/src/main/assets/plugins/LICENSE-dsh-web-mobile.txt`。
 
 ---
 
 ## 注意事项
 
-- **网络调用**：全部在后台线程执行，UI 通过 `Handler(Looper.getMainLooper())` 回主线程刷新，避免阻塞主线程。
-- **安全**：dsh 0.1.2+ 默认启用一次性 token 认证（token 写在启动 URL，服务重启会更新），未登录设备无法访问；更早版本绑定 `0.0.0.0` 后同一内网任何设备都可访问（无认证）。仅限家庭 / 公司可信内网使用，公共 WiFi 请勿开启；出外网请叠加 Tailscale 或 SSH 转发。
-- **配置平面 403**：`settings.*` / `credentials.*` / `agentPreset` 写 / `host.pickDirectory` / `llm.discoverModels` 仅回环可访问，远程需 SSH 端口转发（见上文「远程访问限制」）。
+- **明文 HTTP** — `usesCleartextTraffic="true"`。隧道模式下流量本身已由 SSH 加密，明文仅存在于设备本地回环；但如果用局域网直连，请确保在可信内网。
+- **安全** — dsh 0.1.2+ 默认启用浏览器 token 认证；SSH 隧道再叠加一层 SSH 认证。公开 WiFi 下建议用 Tailscale 而不是直接暴露端口。
+- **仅 arm64** — `dbclient` 目前只为 `arm64-v8a` 构建，不适用于 32 位或 x86 设备。
+- **真机验证状态** — 见 `docs/known-issues.md`。
+
+---
+
+## 已知问题
+
+见 [`docs/known-issues.md`](docs/known-issues.md)（含两处已定性待修行为与日志排查说明）。
 
 ---
 
@@ -178,4 +161,12 @@ dsh-mobile/
 
 **GPL-3.0**（[GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html)）
 
-本项目 SSH 终端模式基于 [Termux terminal-view / terminal-emulator](https://github.com/termux/termux-app)（GPL-3.0）集成，因此整个项目以 GPL-3.0 授权发布；您可以自由使用、修改、分发，但衍生作品必须同样以 GPL-3.0 开源。
+SSH 终端模式集成了 Termux 的 [terminal-view / terminal-emulator](https://github.com/termux/termux-app)（GPL-3.0），因此整个项目以 GPL-3.0 发布；衍生作品需同样以 GPL-3.0 开源。
+
+项目中还打包了第三方组件，各自的许可证随附于对应目录：
+
+| 组件 | 许可证 | 位置 |
+|---|---|---|
+| Termux terminal-view / terminal-emulator | GPL-3.0 | Gradle 依赖 |
+| Dropbear `dbclient` | MIT 风格（见随附文件） | `jniLibs/.../LICENSE-dropbear.txt` |
+| dsh-web-mobile 客户端插件 | MIT | `assets/plugins/LICENSE-dsh-web-mobile.txt` |

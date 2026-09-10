@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.dshmobile.app"
+    namespace = "com.dshhandheld.app"
     compileSdk = 34
 
     signingConfigs {
@@ -17,11 +17,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.dshmobile.app"
+        applicationId = "com.dshhandheld.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 28
-        versionName = "1.11.0"
+        versionCode = 29
+        versionName = "0.1.2"
     }
 
     buildTypes {
@@ -47,7 +47,6 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.webkit:webkit:1.9.0")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // Termux 终端组件（GPL-3.0，见项目 LICENSE）：TUI 模式的终端渲染 + 软键盘交互。
     // JitPack 多模块坐标：group 为 termux/termux-app 仓库点分路径（否则 Gradle
     // 会把 4 段坐标当成 group:artifact:version:module 而找不到）。

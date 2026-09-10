@@ -1,9 +1,13 @@
 # DeepSeek Harness (DSH) 浏览器线上协议 — 逆向规格
 
+> **历史存档（0.1.2 起）**：本规格描述的是 dsh-handheld 早期「原生协议客户端」方案所用的线上协议。
+> 该方案已在 0.1.2 中**完全移除**——App 现在是纯 WebView，不再自行实现 DSH 传输层，
+> 因此仓库中**没有**实现此协议的代码。本文仅作为协议研究记录保留，供需要自行实现
+> DSH 线上传输层的场景参考。
+>
 > **来源**：`dsh-client-connection@…/lib/client.js`（编译后 bundle），DSH 版本 `0.1.1-rc.2`。
-> 目的：为 dsh-mobile 的**后台协议客户端**（`AgentMonitorService`，仅任务完成通知）
-> 以及需要自行实现 DSH 线上传输层的场景提供可实现的协议规格。
-> App 主界面已经是 WebView，不依赖此协议做任何业务 UI。
+> ⚠️ 该版本已过时（写作时 dsh 为 `0.1.5-rc.2`），协议可能已有变更，请以实际 bundle 为准。
+>
 > 结论先行：DSH 的浏览器端协议**不是 REST**，而是「HTTP POST（unary/respond）+ WebSocket（downlink 事件流）」之上的一层 **RPC envelope**，外层是四成员判别联合。
 
 ---

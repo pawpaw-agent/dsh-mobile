@@ -1,4 +1,4 @@
-package com.dshmobile.app
+package com.dshhandheld.app
 
 import android.app.Activity
 import android.app.AlertDialog
@@ -33,7 +33,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
-import com.dshmobile.protocol.SshTunnel
+import com.dshhandheld.protocol.SshTunnel
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -41,7 +41,7 @@ import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * dsh-mobile 连接屏 —— 纯 WebView 版：
+ * dsh-handheld 连接屏 —— 纯 WebView 版：
  *
  *  全屏 WebView 加载 dsh web 前端，功能与桌面 100% 一致
  *  （Markdown/代码高亮/设置页……），自带：
@@ -117,7 +117,7 @@ class MainActivity : Activity() {
 
     private companion object {
         // 黑白色调
-        const val TAG = "DshMobile"
+        const val TAG = "DshHandheld"
         const val COL_BG = 0xFF0A0A0E.toInt()
         const val COL_SURFACE = 0xFF101015.toInt()
         const val COL_TEXT = 0xFFF5F5F7.toInt()
@@ -129,7 +129,7 @@ class MainActivity : Activity() {
         const val COL_ACCENT = 0xFFF5F5F7.toInt()
         const val COL_ACCENT_TEXT = 0xFF0A0A0E.toInt()
         const val COL_ERROR = 0xFFFF6B6B.toInt()
-        const val UA_MARKER = "DshMobile/1.0"
+        const val UA_MARKER = "DshHandheld/1.0"
         const val DEFAULT_PORT = "3080"
         const val REQ_PICK_KEY = 2001
 
@@ -143,8 +143,10 @@ class MainActivity : Activity() {
         // shouldInterceptRequest 命中该 URL 返回 APK assets 里的插件 bundle（283KB）。
         // 插件运行时外部依赖仅 react/jsx-runtime + dsh-client-ui-primitives，
         // 均已在前端壳的 staticModules 种子里（已验证），无需额外注入。
+        // 上游插件（mexiaosqwq/dsh-web-mobile，MIT）的 id 与缓存版本号。id 必须与
+        // APK assets 里那个 bundle 内部的 `id: "dsh-web-mobile"` 一致，改不得。
         const val MOBILE_PLUGIN_ID = "dsh-web-mobile"
-        const val MOBILE_PLUGIN_REV = "dshmobile-2.4.0"
+        const val MOBILE_PLUGIN_REV = "dsh-web-mobile-2.4.0"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
         private val MOBILE_PLUGIN_JS = """
             (function(){
@@ -181,7 +183,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = getSharedPreferences("dsh-mobile", Context.MODE_PRIVATE)
+        prefs = getSharedPreferences("dsh-handheld", Context.MODE_PRIVATE)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT &&
             (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
@@ -501,7 +503,7 @@ class MainActivity : Activity() {
         headerRow.addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
             addView(TextView(this@MainActivity).apply {
-                text = "DSH Mobile"
+                text = "DSH Handheld"
                 textSize = 18f
                 typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
                 setTextColor(COL_TITLE)

@@ -1,4 +1,4 @@
-name: dsh-mobile CI
+name: dsh-handheld CI
 
 on:
   push:
@@ -79,5 +79,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: dsh-mobile-debug
+          name: dsh-handheld-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk

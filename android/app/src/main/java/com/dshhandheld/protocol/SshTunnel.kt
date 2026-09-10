@@ -1,4 +1,4 @@
-package com.dshmobile.protocol
+package com.dshhandheld.protocol
 
 import android.util.Log
 import java.io.Closeable
@@ -43,7 +43,7 @@ class SshTunnel(
      * 本地转发端口候选（按序取第一个空闲的）。**必须稳定**，理由见 [pickFreePort]。
      *
      * 默认 [PORT_CANDIDATES]（3080 优先）。目前只有 DshApp 一处调用
-     * （[com.dshmobile.app.DshApp.ensureTunnel]），WebView 与后台通知共用同一条
+     * （[com.dshhandheld.app.DshApp.ensureTunnel]），WebView 与后台通知共用同一条
      * 隧道，因此进程内就是一个端口。
      */
     private val preferredPorts: List<Int> = PORT_CANDIDATES,
@@ -227,7 +227,7 @@ class SshTunnel(
     /** 与终端模式一致的认证 env（HOME 写 known_hosts；密码经 DROPBEAR_PASSWORD）。 */
     private fun baseEnv(): Map<String, String> {
         val m = mutableMapOf(
-            "HOME" to (System.getenv("HOME") ?: "/data/data/com.dshmobile.app"),
+            "HOME" to (System.getenv("HOME") ?: "/data/data/com.dshhandheld.app"),
             "TERM" to "xterm-256color"
         )
         if (auth is Auth.Password) m["DROPBEAR_PASSWORD"] = auth.password

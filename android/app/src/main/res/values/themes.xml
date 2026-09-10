@@ -5,7 +5,7 @@
   - 全 App 黑白色调与启动图标一致；状态栏/导航栏区域由 Activity 设为透明并沉浸隐藏。
 -->
 <resources>
-    <style name="Theme.DshMobile" parent="@android:style/Theme.Material.NoActionBar">
+    <style name="Theme.DshHandheld" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:statusBarColor">#0A0A0E</item>
         <item name="android:navigationBarColor">#0A0A0E</item>
         <item name="android:windowBackground">#0A0A0E</item>

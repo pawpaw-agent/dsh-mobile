@@ -1,4 +1,4 @@
-package com.dshmobile.app
+package com.dshhandheld.app
 
 import android.app.Activity
 import android.content.ClipData
@@ -25,7 +25,7 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * dsh-mobile SSH 终端模式 —— Dropbear dbclient + Termux 原生渲染。
+ * dsh-handheld SSH 终端模式 —— Dropbear dbclient + Termux 原生渲染。
  *
  * 架构（B 方案，桥接清零）：
  *  - TerminalSession 直接启动 `libdbclient.so`（我们 CI 从官方 mkj/dropbear
@@ -98,7 +98,7 @@ class TuiActivity : Activity() {
             // 按密度换算，默认 15dp，A+/A- 可调（prefs tui_font_size_px）。
             val density = resources.displayMetrics.density
             val defaultPx = (15 * density).toInt()
-            val savedPx = getSharedPreferences("dsh-mobile", MODE_PRIVATE)
+            val savedPx = getSharedPreferences("dsh-handheld", MODE_PRIVATE)
                 .getInt("tui_font_size_px", defaultPx)
             val finalPx = savedPx.coerceIn((12 * density).toInt(), (36 * density).toInt())
             Log.i(TAG, "init font: density=$density default=${defaultPx}px saved=${savedPx}px final=${finalPx}px")
@@ -167,7 +167,7 @@ class TuiActivity : Activity() {
             return
         }
 
-        val prefs = getSharedPreferences("dsh-mobile", MODE_PRIVATE)
+        val prefs = getSharedPreferences("dsh-handheld", MODE_PRIVATE)
         val rawSsh = prefs.getString("ssh_json", null)
         val cfg = rawSsh?.let { runCatching { JSONObject(it) }.getOrNull() }
         val host = cfg?.optString("sshHost") ?: ""
@@ -272,7 +272,7 @@ class TuiActivity : Activity() {
     private fun resolveKeyPath(): String? {
         val libDir = applicationInfo.nativeLibraryDir
         // 1) 连接屏导入的私钥
-        val imported = getSharedPreferences("dsh-mobile", MODE_PRIVATE)
+        val imported = getSharedPreferences("dsh-handheld", MODE_PRIVATE)
             .getString("ssh_json", null)?.let {
                 runCatching { JSONObject(it) }.getOrNull()
             }?.optString("keyPath", "")

@@ -397,7 +397,7 @@ public final class ExtraKeysView extends GridLayout {
                 button.setTextColor(mButtonTextColor);
                 button.setAllCaps(mButtonTextAllCaps);
                 button.setPadding(0, 0, 0, 0);
-                // dsh-mobile: 普通键 15sp（50dp 键排内 HOME/CTRL/PGDN 不截断，
+                // dsh-handheld: 普通键 15sp（50dp 键排内 HOME/CTRL/PGDN 不截断，
                 // 列宽 180px 实测余量 ~35%）；KEYBOARD（rowSpan=2 跨两行）30sp。
                 float textSp = "KEYBOARD".equals(buttonInfo.getKey()) ? 30f : 15f;
                 button.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, textSp);
@@ -462,7 +462,7 @@ public final class ExtraKeysView extends GridLayout {
                 param.height = 0;
                 param.setMargins(0, 0, 0, 0);
                 param.columnSpec = GridLayout.spec(col, GridLayout.FILL, 1.f);
-                // dsh-mobile: rowSpan > 1 merges the cell vertically (e.g. KEYBOARD)
+                // dsh-handheld: rowSpan > 1 merges the cell vertically (e.g. KEYBOARD)
                 int rowSpan = Math.max(1, Math.min(buttonInfo.getRowSpan(), buttons.length));
                 param.rowSpec = GridLayout.spec(row, rowSpan, GridLayout.FILL, 1.f);
                 button.setLayoutParams(param);
