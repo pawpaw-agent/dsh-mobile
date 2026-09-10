@@ -7,6 +7,7 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -96,14 +97,33 @@ class SshTunnel(
     } catch (_: Exception) { false }
 
     /**
-     * 预选空闲端口。dbclient -L 不接受端口 0，我们必须先确定具体端口；
-     * bind(0) 分配后立即释放，存在极小竞态（他人抢注）——重试缓解。
+     * 选本地转发端口：**优先固定 [PREFERRED_PORT]**。
+     *
+     * 为什么不用随机端口：WebView 的 origin 是 `http://127.0.0.1:<port>`，端口一变
+     * origin 就变，localStorage / IndexedDB / cache 全部另起一份。实测重连后上一
+     * origin 的 localStorage 读不到（写入的探针 key 返回 null），每条会话的草稿/视图
+     * 状态丢失，旧 origin 的 ~4.5KB 还永久留在 leveldb 里。服务端 cookie 名又含
+     * authority，固定端口能让浏览器直接覆盖而不是累积（HTTP 431 那次的根因）。
+     *
+     * 固定端口被占（别的 App / 残留进程）时回退到内核分配的空闲端口——
+     * 那种情况下 origin 会变，但属于罕见分支。
      */
-    private fun pickFreePort(): Int = try {
-        ServerSocket(0).use { it.localPort }
+    private fun pickFreePort(): Int {
+        if (isPortFree(PREFERRED_PORT)) return PREFERRED_PORT
+        Log.w(TAG, "固定端口 $PREFERRED_PORT 被占用，回退到临时端口（本次 origin 会变）")
+        return try {
+            ServerSocket(0).use { it.localPort }
+        } catch (_: Exception) {
+            // 兜底：10240 起循环（每次 +37 避开常见段）
+            (10240 + (retrySeq.incrementAndGet() * 37) % 20000)
+        }
+    }
+
+    /** 试绑即释放。dbclient -L 不接受端口 0，必须先定下具体端口（存在极小抢注竞态）。 */
+    private fun isPortFree(port: Int): Boolean = try {
+        ServerSocket(port).use { true }
     } catch (_: Exception) {
-        // 兜底：10240 起循环（每次 +37 避开常见段）
-        (10240 + (retrySeq.incrementAndGet() * 37) % 20000)
+        false
     }
 
     private fun connectOnce() {
@@ -237,13 +257,27 @@ class SshTunnel(
     override fun close() {
         started.set(false)
         reconnectThread?.interrupt()
-        try { proc?.destroy() } catch (_: Exception) {}
+        val dying = proc
         proc = null
+        try { dying?.destroy() } catch (_: Exception) {}
+        // 等旧 dbclient 真正退出：固定端口要立刻重绑，残留进程会占着监听 socket
+        // （Process.destroy 是异步的）。正常几十毫秒就退，只有异常情况才等到超时。
+        try {
+            if (dying != null && !dying.waitFor(1500, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "dbclient 未在 1.5s 内退出，强制杀")
+                dying.destroyForcibly()
+            }
+        } catch (_: Exception) {}
         localBaseUrl = null
     }
 
     companion object {
         private const val TAG = "SshTunnel"
+
+        /** 固定本地转发端口：让 WebView 的 origin 稳定（见 [pickFreePort]）。
+         *  取 13080 而非 3080，避免与「手机上也跑着 dsh」的部署撞车；
+         *  也在 Linux 临时端口段（32768-60999）之外，不会和出站连接抢。 */
+        const val PREFERRED_PORT = 13080
 
         /** dbclient 可执行文件路径：由 DshApp.onCreate 注入（nativeLibraryDir/libdbclient.so）。 */
         @Volatile
