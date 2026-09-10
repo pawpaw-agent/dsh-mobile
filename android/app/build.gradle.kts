@@ -81,13 +81,23 @@ android {
 }
 
 dependencies {
-    // 版本上限由 AAR 元数据里的 minCompileSdk 决定，不是“有新版就升”：
-    //   core 1.13.1 → minCompileSdk 34（= 当前 compileSdk，可用）
-    //   core 1.15.0 → 35，1.17.0 → 36，1.19.0 → 37（均须先升 compileSdk）
-    //   webkit 1.17.0 → 33（可用）
-    // 升 compileSdk / AGP / Kotlin 是一笔独立的现代化工程，见 README「版本与升级」。
+    // 升级上限受**两个**独立约束，二者都必须满足：
+    //
+    // 1) AAR 元数据的 minCompileSdk —— 不得超过当前 compileSdk 34
+    //    core 1.13.1 → 34；core 1.15.0 → 35；1.17.0 → 36；1.19.0 → 37
+    //    webkit 1.15.0/1.17.0 → 33
+    //
+    // 2) 传递依赖的 kotlin-stdlib metadata 版本 —— 不得高于本机 Kotlin 编译器
+    //    （当前 1.9.22，最多读 metadata 2.0.0）。这条更隐蔽：webkit 1.9.0–1.15.0
+    //    不带 kotlin 依赖，而 **webkit 1.16.0 起引入 kotlin-stdlib 2.1.20**
+    //    （metadata 2.1.0），会直接编译失败：
+    //      "Module was compiled with an incompatible version of Kotlin"
+    //    core-ktx 到 1.13.1 为止仍只依赖 kotlin-stdlib 1.8.22，故可用。
+    //
+    // 因此当前安全上限是 core-ktx 1.13.1 + webkit 1.15.0。再往上必须连同
+    // Kotlin 2.x 一起升 —— 那是一笔独立的现代化工程，见 README「版本与升级」。
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.webkit:webkit:1.17.0")
+    implementation("androidx.webkit:webkit:1.15.0")
     // Termux 终端组件（GPL-3.0，见项目 LICENSE）：TUI 模式的终端渲染 + 软键盘交互。
     // JitPack 多模块坐标：group 为 termux/termux-app 仓库点分路径（否则 Gradle
     // 会把 4 段坐标当成 group:artifact:version:module 而找不到）。

@@ -164,18 +164,27 @@ of Android Keystore"），故直接按官方指引使用平台 Keystore，不引
 
 ### 依赖为什么“不是最新”
 
-androidx 能否升级由 AAR 元数据里的 `minCompileSdk` 决定，**不是有新版就能升**：
+升级上限受**两个独立约束**，必须同时满足：
 
-| 库 | 当前 | 升级上限（compileSdk 34） |
-|---|---|---|
-| `androidx.core:core-ktx` | 1.13.1 | 1.13.1（1.15.0 要 35，1.19.0 要 37） |
-| `androidx.webkit:webkit` | 1.17.0 | 已是当前 compileSdk 下的最高 |
-| `termux terminal-view` | 0.118.1 | 见下方 vendoring 说明 |
+1. **AAR 元数据的 `minCompileSdk`** ≤ 当前 `compileSdk`（34）；
+2. **传递依赖的 `kotlin-stdlib` metadata 版本** ≤ 本机 Kotlin 编译器可读上限
+   （Kotlin 1.9.22 → metadata 2.0.0）。
+
+第二条更隐蔽：**`webkit` 从 1.16.0 起引入 `kotlin-stdlib:2.1.20`**（metadata 2.1.0），
+在 Kotlin 1.9.22 下会直接编译失败（`Module was compiled with an incompatible version of
+Kotlin`）。`core-ktx` 到 1.13.1 为止仍只依赖 `kotlin-stdlib:1.8.22`。
+
+| 库 | 当前 | 升级上限 | 卡在哪 |
+|---|---|---|---|
+| `androidx.webkit:webkit` | **1.15.0** | 1.15.0 | 1.16.0 起要 kotlin-stdlib 2.1.20 |
+| `androidx.core:core-ktx` | **1.13.1** | 1.13.1 | 1.15.0 起要 minCompileSdk 35 |
+| `termux terminal-view` | 0.118.1 | — | 见下方 vendoring 说明 |
 
 ### 待办的现代化项
 
-- **compileSdk / targetSdk 34 → 36**，连带 AGP → 9.x、Gradle → 9.x、Kotlin → 2.x。
-  耦合改动且涉及 K2 编译器迁移，应单独成一个变更并做真机回归。
+- **Kotlin 1.9.22 → 2.x**：解锁 `webkit` 1.16+ 与更高版本 androidx 的前提，涉及 K2
+  编译器迁移，需真机回归。
+- **compileSdk / targetSdk 34 → 36**，连带 AGP → 9.x、Gradle → 9.x。与上一条耦合。
 - **启用 R8**：`release` 变体目前 `isMinifyEnabled = false`。首次启用压缩/混淆需真机验证
   （R8 可能裁掉运行期才引用的类），不宜与签名变更同时进行。
 
