@@ -20,8 +20,8 @@ android {
         applicationId = "com.dshmobile.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 21
-        versionName = "1.8.1"
+        versionCode = 22
+        versionName = "1.8.2"
     }
 
     buildTypes {

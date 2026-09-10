@@ -65,6 +65,7 @@ class MainActivity : Activity() {
     private var statusView: TextView? = null
     private var sshKeyPathInput: EditText? = null
     private var disconnectButton: Button? = null
+    private var backToWebButton: Button? = null
 
     // Step3 连接进度行（引导流程；null = 界面未构造/非引导状态）
     private var stepGuideLine1: TextView? = null
@@ -72,6 +73,7 @@ class MainActivity : Activity() {
     private var stepGuideLine3: TextView? = null
     private var stepGuideCard: View? = null
     private var stepGuideStep2: View? = null
+    private var step1Card: LinearLayout? = null
 
     /** 连接进行中守卫：防连点「连接」并发多个隧道/多次设置回调。 */
     private val connecting = AtomicBoolean(false)
@@ -500,7 +502,6 @@ class MainActivity : Activity() {
 
         // ── 三步连接引导：选模式 → 填连接信息 → 连接中 ──────────────────
         // 关键字段引用保留为类字段（连接流程/状态钩子复用）
-        var step1Card: LinearLayout? = null   // 选模式
         var step2Card: LinearLayout? = null   // 填信息
         var step3Card: LinearLayout? = null   // 连接中
         var connectMainBtn: Button? = null    // 底部主按钮（每步复用）
@@ -730,7 +731,7 @@ class MainActivity : Activity() {
                     return@setOnClickListener
                 }
                 if (!beginConnect()) { guideBackToStep2(); return@setOnClickListener }
-                stepGuideLine1?.text = "① 检查电脑 正在连接"
+                guideLine(1, "① 检查电脑 正在连接…", running = true)
                 connectViaSsh(sh, sport, su, target, auth)
             }
         }
@@ -796,6 +797,33 @@ class MainActivity : Activity() {
         }
         card.addView(statusView, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
+        // 回到网页（隧道还活着、WebView 里还有页面时才显示）：
+        // 从网页按返回后再点一下就能回去，不必重建隧道（重建会换本地端口）
+        backToWebButton = Button(this@MainActivity).apply {
+            text = "回到网页"
+            isAllCaps = false
+            textSize = 12f
+            setTextColor(COL_ACCENT_TEXT)
+            setBackgroundResource(R.drawable.bg_button_primary)
+            setOnClickListener {
+                if (webView?.url?.startsWith("http") == true) {
+                    connectView?.visibility = View.GONE
+                } else {
+                    // WebView 已空（如断开后）→ 有隧道就重新加载，没有则提示重连
+                    val url = lastUrl
+                    val tunneled = (application as DshApp).sshTunnel != null
+                    if (tunneled && !url.isNullOrBlank()) {
+                        sshTokenAck = false
+                        connectWeb(url)
+                    } else {
+                        status("网页已关闭，请重新连接", true)
+                    }
+                }
+            }
+        }
+        card.addView(backToWebButton!!, rowParams(top = dp(10), height = dp(36), width = ViewGroup.LayoutParams.MATCH_PARENT))
+        backToWebButton!!.visibility = View.GONE
+
         // 断开连接（仅隧道运行时显示）
         disconnectButton = Button(this@MainActivity).apply {
             text = "断开连接"
@@ -807,6 +835,7 @@ class MainActivity : Activity() {
         }
         card.addView(disconnectButton!!, rowParams(top = dp(10), height = dp(36), width = ViewGroup.LayoutParams.MATCH_PARENT))
         disconnectButton!!.visibility = View.GONE
+
 
         // 上次连接摘要（单行，非空时显示）
         savedSsh?.takeIf { it.optString("sshHost").isNotBlank() }?.let {
@@ -1079,7 +1108,7 @@ class MainActivity : Activity() {
                     isAllCaps = false
                     setTextColor(COL_TEXT)
                     setBackgroundResource(R.drawable.bg_button_secondary)
-                    setOnClickListener { hideErrorPage(); connectView?.visibility = View.VISIBLE; refreshConnectState() }
+                    setOnClickListener { hideErrorPage(); showConnectScreen() }
                 }, rowParams(top = dp(12), height = dp(48), width = dp(200)))
             }
             (webView?.parent as? ViewGroup)?.addView(errorView)
@@ -1163,7 +1192,7 @@ class MainActivity : Activity() {
         val tunnel = (application as DshApp).sshTunnel
         if (tunnel == null) {
             status("尚无 SSH 隧道，请先连接", true)
-            hideErrorPage(); connectView?.visibility = View.VISIBLE; refreshConnectState()
+            hideErrorPage(); showConnectScreen()
             return
         }
         hideErrorPage()
@@ -1223,7 +1252,7 @@ class MainActivity : Activity() {
         when {
             connectView?.visibility == View.VISIBLE -> moveTaskToBack(true)
             webView?.canGoBack() == true -> webView?.goBack()
-            webView?.url?.startsWith("http") == true -> { connectView?.visibility = View.VISIBLE; refreshConnectState() }
+            webView?.url?.startsWith("http") == true -> showConnectScreen()
             else -> moveTaskToBack(true)
         }
     }
@@ -1279,28 +1308,29 @@ class MainActivity : Activity() {
     private fun guideStep3Show() {
         stepGuideCard?.visibility = View.VISIBLE
         stepGuideStep2?.visibility = View.GONE
-        guideLine(0, "① 检查电脑 正在连接…", running = true)
-        guideLine(1, "② 建立安全通道", running = true)
-        guideLine(2, "③ 打开 dsh 网页", running = true)
+        guideLine(1, "① 检查电脑 正在连接…", running = true)
+        guideLine(2, "② 建立安全通道", running = true)
+        guideLine(3, "③ 打开 dsh 网页", running = true)
+    }
+    /** 引导行统一按 ①②③ 编号（1 起）；此前映射是 0 基、调用方传 1 基，
+     *  导致「① 检查电脑」被写进第二行、② 行永远不更新。 */
+    private fun guideLineView(index: Int): TextView? = when (index) {
+        1 -> stepGuideLine1
+        2 -> stepGuideLine2
+        else -> stepGuideLine3
     }
     private fun guideLine(index: Int, text: String, running: Boolean = false) {
-        val v = when (index) {
-            0 -> stepGuideLine1; 1 -> stepGuideLine2; else -> stepGuideLine3
-        } ?: return
+        val v = guideLineView(index) ?: return
         v.text = text
         v.setTextColor(if (running) COL_MUTED else COL_ACCENT)
     }
     private fun guideLineDone(index: Int, text: String) {
-        val v = when (index) {
-            0 -> stepGuideLine1; 1 -> stepGuideLine2; else -> stepGuideLine3
-        } ?: return
+        val v = guideLineView(index) ?: return
         v.text = text
         v.setTextColor(COL_ACCENT)
     }
     private fun guideLineFail(index: Int, text: String) {
-        val v = when (index) {
-            0 -> stepGuideLine1; 1 -> stepGuideLine2; else -> stepGuideLine3
-        } ?: return
+        val v = guideLineView(index) ?: return
         v.text = text
         v.setTextColor(COL_ERROR)
     }
@@ -1324,18 +1354,36 @@ class MainActivity : Activity() {
         unauthorizedCleanTried = false
         webView?.stopLoading()
         webView?.loadUrl("about:blank")
-        connectView?.visibility = View.VISIBLE
-        refreshConnectState()
+        showConnectScreen()
         status("已断开")
     }
 
-    /** 按隧道状态刷新连接屏上的「断开连接」按钮。 */
+    /** 按隧道状态刷新连接屏上的按钮与提示。 */
     private fun refreshConnectState() {
         val tunneled = (application as DshApp).sshTunnel != null
         disconnectButton?.visibility = if (tunneled) View.VISIBLE else View.GONE
+        backToWebButton?.visibility =
+            if (tunneled && webView?.url?.startsWith("http") == true) View.VISIBLE else View.GONE
         // 回到连接屏时清掉残留的进度文案（「连接中… http://127.0.0.1:端口」既过时又是术语）。
         // 隧道不在时不覆盖调用方刚设的错误提示。
         if (tunneled) status("已连上电脑")
+    }
+
+    /** 回到连接屏统一收口：一律停在 Step 2，并复位 Step3 的进度行。
+     *  Step3 是上一轮连接的残留，直接显示会出现「连接中…」却早已连上的矛盾画面。 */
+    private fun showConnectScreen() {
+        step1Card?.visibility = View.GONE
+        stepGuideCard?.visibility = View.GONE
+        stepGuideStep2?.visibility = View.VISIBLE
+        resetGuideLines()
+        connectView?.visibility = View.VISIBLE
+        refreshConnectState()
+    }
+
+    private fun resetGuideLines() {
+        guideLine(1, "① 检查电脑 等待连接…", running = true)
+        guideLine(2, "② 建立安全通道", running = true)
+        guideLine(3, "③ 打开 dsh 网页", running = true)
     }
 
     /** 失败自动重试：5s 后重载（若隧道仍活；watchdog 会重建死隧道）。每次 connectWeb 重置 3 次余量。 */
