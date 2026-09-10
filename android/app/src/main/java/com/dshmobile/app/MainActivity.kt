@@ -352,7 +352,7 @@ class MainActivity : Activity() {
             // 失败先退：隧道没起来就不再干跑 token 探测（4×8s 白等）
             if (base == null) {
                 tunnel.close()
-                runOnUiThread { status("自动连接失败，请在连接屏手动重试"); endConnect() }
+                runOnUiThread { status("自动连接失败，请在连接屏手动重试"); refreshConnectState(); endConnect() }
                 return@Thread
             }
             // 自动获取最新 token（服务重启后旧 token 失效；失败静默回退）
@@ -996,6 +996,9 @@ class MainActivity : Activity() {
                     val what = if (auth is SshTunnel.Auth.KeyPair) "私钥" else "密码"
                     guideLineFail(1, "① 检查电脑 ✗ 连不上你的电脑（检查地址/账号/$what）")
                     guideLine(2, "② 建立安全通道 未开始", running = true)
+                    // 旧隧道已在上面的 closeCurrentTunnel() 关掉，这里必须刷新，
+                    // 否则「回到网页 / 断开连接」会留在屏幕上指向一个已死的隧道
+                    refreshConnectState()
                     endConnect()
                 }
                 return@Thread
