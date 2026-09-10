@@ -22,7 +22,7 @@ import javax.crypto.spec.GCMParameterSpec
  * ## 威胁模型
  *
  * 主要防的是**拿到设备本地数据的攻击者**：debuggable 包或 root 设备上 `run-as` 直接读
- * `shared_prefs/*.xml`、adb backup、以及在旧机上被物理提取文件系统。密钥由
+ * `shared_prefs` 下的 XML、adb backup、以及在旧机上被物理提取文件系统。密钥由
  * AndroidKeyStore 持有且**不可导出**（即便应用私有目录被完整复制，没有该设备的
  * Keystore 也无法解密）。
  *
