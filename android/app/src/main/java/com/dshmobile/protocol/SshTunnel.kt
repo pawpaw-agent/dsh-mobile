@@ -9,7 +9,6 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * SSH 本地端口转发 —— dbclient 进程方案（方案 B）。
@@ -50,7 +49,6 @@ class SshTunnel(
 
     private val started = AtomicBoolean(false)
     private val connecting = AtomicBoolean(false)
-    private val retrySeq = AtomicInteger(0)
     @Volatile private var proc: Process? = null
     @Volatile private var localPort: Int = 0
     private var reconnectThread: Thread? = null
@@ -97,26 +95,29 @@ class SshTunnel(
     } catch (_: Exception) { false }
 
     /**
-     * 选本地转发端口：**优先固定 [PREFERRED_PORT]**。
+     * 选本地转发端口：按 [PORT_CANDIDATES] 顺序取第一个空闲的（**不用随机端口**）。
      *
-     * 为什么不用随机端口：WebView 的 origin 是 `http://127.0.0.1:<port>`，端口一变
-     * origin 就变，localStorage / IndexedDB / cache 全部另起一份。实测重连后上一
-     * origin 的 localStorage 读不到（写入的探针 key 返回 null），每条会话的草稿/视图
-     * 状态丢失，旧 origin 的 ~4.5KB 还永久留在 leveldb 里。服务端 cookie 名又含
-     * authority，固定端口能让浏览器直接覆盖而不是累积（HTTP 431 那次的根因）。
+     * 为什么端口必须稳定：WebView 的 origin 是 `http://127.0.0.1:<port>`，端口一变
+     * origin 就变，localStorage / IndexedDB / cache 全部另起一份。实测随机端口时
+     * 重连后上一 origin 的 localStorage 读不到（探针 key 返回 null），每条会话的
+     * 草稿/视图状态丢失，旧 origin 的 ~4.5KB 还永久留在 leveldb 里。服务端 cookie
+     * 名又含 authority（`dsh-auth-` + sha256(authority)），端口固定后浏览器直接
+     * 覆盖而不是累积（HTTP 431 那次的根因）。
      *
-     * 固定端口被占（别的 App / 残留进程）时回退到内核分配的空闲端口——
-     * 那种情况下 origin 会变，但属于罕见分支。
+     * 首选 3080 与 dsh web 的默认端口一致，撞车时退到 13080。
      */
     private fun pickFreePort(): Int {
-        if (isPortFree(PREFERRED_PORT)) return PREFERRED_PORT
-        Log.w(TAG, "固定端口 $PREFERRED_PORT 被占用，回退到临时端口（本次 origin 会变）")
-        return try {
-            ServerSocket(0).use { it.localPort }
-        } catch (_: Exception) {
-            // 兜底：10240 起循环（每次 +37 避开常见段）
-            (10240 + (retrySeq.incrementAndGet() * 37) % 20000)
+        for (p in PORT_CANDIDATES) {
+            if (isPortFree(p)) {
+                if (p != PORT_CANDIDATES.first()) {
+                    Log.w(TAG, "本地端口 ${PORT_CANDIDATES.first()} 被占用，改用 $p")
+                }
+                return p
+            }
         }
+        // 明显异常状态（两个端口都被占）→ 显式报错，不偷偷换随机端口（换了 origin 就变）
+        Log.e(TAG, "本地端口候选 ${PORT_CANDIDATES.joinToString()} 全部被占用")
+        return -1
     }
 
     /** 试绑即释放。dbclient -L 不接受端口 0，必须先定下具体端口（存在极小抢注竞态）。 */
@@ -137,6 +138,11 @@ class SshTunnel(
         for (attempt in 1..3) {
             if (!started.get()) return
             val port = pickFreePort()
+            if (port < 0) {
+                onStateChange?.invoke(
+                    "failed: 本地端口 ${PORT_CANDIDATES.joinToString(" / ")} 都被占用，请关掉占用它的应用后重试")
+                return
+            }
             val args = mutableListOf(
                 bin,
                 "-p", sshPort.toString(),
@@ -274,10 +280,9 @@ class SshTunnel(
     companion object {
         private const val TAG = "SshTunnel"
 
-        /** 固定本地转发端口：让 WebView 的 origin 稳定（见 [pickFreePort]）。
-         *  取 13080 而非 3080，避免与「手机上也跑着 dsh」的部署撞车；
-         *  也在 Linux 临时端口段（32768-60999）之外，不会和出站连接抢。 */
-        const val PREFERRED_PORT = 13080
+        /** 本地转发端口候选（按序取第一个空闲的）：3080 与 dsh web 默认端口一致，
+         *  被占时退到 13080。端口必须稳定，理由见 [pickFreePort]。 */
+        val PORT_CANDIDATES = listOf(3080, 13080)
 
         /** dbclient 可执行文件路径：由 DshApp.onCreate 注入（nativeLibraryDir/libdbclient.so）。 */
         @Volatile
