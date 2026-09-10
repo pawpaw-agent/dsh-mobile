@@ -100,8 +100,6 @@ class MainActivity : Activity() {
     /** 连接进行中守卫：防连点「连接」并发多个隧道/多次设置回调。 */
     private val connecting = AtomicBoolean(false)
 
-    /** 通知权限询问进行中（权限对话框本身会触发 onPause，防重入再弹）。 */
-    private var notificationAskInFlight = false
 
     /** 页面加载失败后的自动重试余量（WiFi 断连/隧道重建窗口期自动恢复，无需手动点重试）。 */
     private var loadRetriesLeft = 0
@@ -1207,8 +1205,6 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         webView?.onResume(); webView?.resumeTimers()
-        // 监听服务由 AgentMonitorService 经 ActivityLifecycleCallbacks 自停
-        //（外部 stopService 会与 startForegroundService 的 5s 窗口竞态 → 崩溃）
         refreshConnectState()
     }
 
@@ -1220,28 +1216,6 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         webView?.onPause(); webView?.pauseTimers()
-        // 通知权限只在首次退后台时询问（一次）；监听服务由 DshApp 的可见性回调启动
-        //（onPause 触发会在打开 TuiActivity 时误启动，已在 DshApp 改为全 UI 不可见才启动）
-        if (prefs.getString("url", null) != null) requestNotifyPermissionOnce()
-    }
-
-    /** Android 13+ 通知运行时权限：只询问一次（notify_asked），
-     * in-flight 守卫防权限对话框触发 onPause 导致的重复请求。
-     * 无权限时通知静默不响，不影响 FGS 本身。 */
-    private fun requestNotifyPermissionOnce() {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED &&
-            !notificationAskInFlight &&
-            !prefs.getBoolean("notify_asked", false)) {
-            notificationAskInFlight = true
-            prefs.edit().putBoolean("notify_asked", true).apply()
-            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
-        }
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 1001) notificationAskInFlight = false
     }
 
     @Deprecated("Deprecated in Java")

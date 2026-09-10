@@ -1,14 +1,11 @@
 package com.dshmobile.app
 
-import android.app.Activity
 import android.app.Application
-import android.content.Context
 import android.util.Log
 import android.webkit.WebView
 import com.dshmobile.protocol.SshTunnel
 import org.json.JSONObject
 import java.io.File
-import java.util.Collections
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -16,18 +13,17 @@ import java.util.concurrent.CopyOnWriteArrayList
  *
  * - WebView：跨重建保活，避免重新 loadUrl —— 前端 bundle 不必
  *   重新下载/解析/执行，滚动位置、JS 运行时、会话状态全部保留。
- * - SshTunnel：**所有权在这里**。MainActivity（WebView 用）和
- *   AgentMonitorService（后台通知用）都通过 [ensureTunnel] 取同一条隧道，
- *   不再各自建一条 —— 此前是两条 dbclient + 四个 WebSocket + 两个本地端口，
- *   固定端口后还会互抢。谁都不负责关闭它，只有 [closeTunnel]（用户手动断开）
- *   或进程结束才关。
+ * - SshTunnel：**所有权在这里**。[ensureTunnel] 是唯一入口，按配置指纹复用；
+ *   调用方拿到的都是同一条隧道（此前 MainActivity 与后台通知服务各建一条 =
+ *   两个 dbclient / 两个本地端口）。关闭只有 [closeTunnel]（用户手动断开）
+ *   或进程结束。
  * - SshTunnel.binPath：dbclient 可执行文件（nativeLibraryDir/libdbclient.so），
  *   SshTunnel 自身无 Context，由这里注入（方案 B：进程式隧道与终端共用）。
  *
- * 后台监听触发（U3 修复）：不再由 MainActivity.onPause 触发 —— 打开
- * TuiActivity 也会让 MainActivity onPause，导致用户正在终端里干活时
- * 后台错误地多起一条 SSH 隧道 + 双 WebSocket + 前台通知。改为可见性计数：
- * 所有 dsh UI（Main/Tui）全部 onStop 后才启动 AgentMonitorService。
+ * 后台行为：**没有前台服务**（原本的 agent 完成通知已在 1.11.0 移除，改由服务端
+ * 经微信推送）。退到后台后进程降为 cached，可能被系统回收 → 回到 App 会冷启动
+ * 重连一次；因为本地端口固定为 3080，WebView 的 origin 稳定，localStorage 里的
+ * 会话/工作区状态不会因此丢失。
  */
 class DshApp : Application() {
 
@@ -43,7 +39,7 @@ class DshApp : Application() {
     var sshTunnel: SshTunnel? = null
         private set
 
-    /** 隧道状态/基址变化的订阅者（MainActivity 用；后台服务不关心）。 */
+    /** 隧道状态/基址变化的订阅者（目前只有 MainActivity 订阅）。 */
     interface TunnelObserver {
         fun onTunnelState(state: String) {}
         fun onTunnelBaseChanged(base: String) {}
@@ -61,30 +57,10 @@ class DshApp : Application() {
         tunnelObservers.remove(o)
     }
 
-    /** 当前可见的 dsh UI（MainActivity / TuiActivity）。 */
-    private val visibleActivities: MutableSet<String> = Collections.synchronizedSet(HashSet())
-
-    private val visibilityCallbacks = object : Application.ActivityLifecycleCallbacks {
-        override fun onActivityStarted(activity: Activity) {
-            visibleActivities.add(activity.javaClass.name)
-        }
-        override fun onActivityStopped(activity: Activity) {
-            visibleActivities.remove(activity.javaClass.name)
-            // 最后一个 dsh UI 消失 = App 真正退后台 → 启动 agent 完成监听
-            if (visibleActivities.isEmpty()) startMonitorIfNeeded()
-        }
-        override fun onActivityCreated(activity: Activity, savedInstanceState: android.os.Bundle?) {}
-        override fun onActivityResumed(activity: Activity) {}
-        override fun onActivityPaused(activity: Activity) {}
-        override fun onActivitySaveInstanceState(activity: Activity, outState: android.os.Bundle) {}
-        override fun onActivityDestroyed(activity: Activity) {}
-    }
-
     override fun onCreate() {
         super.onCreate()
         SshTunnel.binPath = File(applicationInfo.nativeLibraryDir, "libdbclient.so")
             .takeIf { it.exists() }?.absolutePath
-        registerActivityLifecycleCallbacks(visibilityCallbacks)
     }
 
     // ── 隧道所有权 ────────────────────────────────────────────────
@@ -173,17 +149,6 @@ class DshApp : Application() {
             // （3080 优先）；见 SshTunnel.pickFreePort。
             preferredPorts = SshTunnel.PORT_CANDIDATES,
         )
-    }
-
-    /** 只有曾连接过（url 已保存）才启动监听；权限询问由 MainActivity 单独负责。 */
-    private fun startMonitorIfNeeded() {
-        val prefs = getSharedPreferences("dsh-mobile", Context.MODE_PRIVATE)
-        if (prefs.getString("url", null) == null) return
-        try {
-            AgentMonitorService.start(this)
-        } catch (e: Exception) {
-            Log.w(TAG, "monitor start failed", e)
-        }
     }
 
     private companion object {
