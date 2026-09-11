@@ -12,6 +12,46 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Mobile adaptation contract gate. The app's whole value is "dsh's web UI on a
+  # phone", and that adaptation rests entirely on dsh's DOM hooks (data-phase,
+  # data-composer-input, …) which have NO version contract: dsh evolves on its
+  # own, the plugin is vendored and pinned. If dsh renames one, the adaptation
+  # silently breaks and you only find out on the phone.
+  #
+  # This job asserts the vendored plugin still reads exactly the hooks declared
+  # in the committed contract, so re-vendoring cannot quietly widen our
+  # dependency on unverified hooks. It is static (Node only, no browser, no
+  # dsh install) and runs in seconds.
+  #
+  # The FULL check — proving each declared hook actually exists in the installed
+  # dsh frontend — needs dsh present, so it runs on the machine that has dsh:
+  #   node scripts/check-mobile-hooks.mjs
+  # Run it after every dsh upgrade. See docs/mobile-ui-verification.md.
+  mobile-contract:
+    name: Mobile adaptation contract
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify plugin ⇄ contract agreement
+        run: node scripts/check-mobile-hooks.mjs --contract
+
+      - name: Verify the bootstrap template is the single source
+        run: |
+          # The injection bootstrap lives in assets and is read by BOTH the app
+          # (MainActivity.mobileBootstrapJs) and the verification harness. If it
+          # drifted back into a Kotlin raw string the harness would test
+          # something the app does not run.
+          test -f android/app/src/main/assets/plugins/mobile-bootstrap.js \
+            || { echo "::error::mobile-bootstrap.js 缺失"; exit 1; }
+          if grep -q 'Object.defineProperty(window, "__DSH_BOOT__"' \
+               android/app/src/main/java/com/dshhandheld/app/MainActivity.kt; then
+            echo "::error::MainActivity 里又出现了内联的注入脚本 —— 必须只从 assets 读取"
+            exit 1
+          fi
+          echo "✓ 注入脚本只有 assets 一份"
+
   # Terminal conformance gate: proves the differential test bed still works.
   # Runs first and needs no Android SDK — it is pure JVM, so it finishes in seconds
   # and a failure here means the corpus or the harness rotted, not the app.
@@ -100,7 +140,7 @@ jobs:
     runs-on: ubuntu-latest
     # Gate the artifact on the terminal harness: when it fails, terminal behaviour in
     # this tree is unverified, so there is no point producing an APK from it.
-    needs: [build-dropbear, conformance]
+    needs: [build-dropbear, conformance, mobile-contract]
 
     steps:
       - uses: actions/checkout@v4

@@ -221,37 +221,21 @@ class MainActivity : Activity() {
         const val MOBILE_PLUGIN_ID = "dsh-web-mobile"
         const val MOBILE_PLUGIN_REV = "dsh-web-mobile-2.4.0-dsh1"
         const val MOBILE_PLUGIN_URL = "/plugins/??$MOBILE_PLUGIN_ID/client.js&rev=$MOBILE_PLUGIN_REV"
-        private val MOBILE_PLUGIN_JS = """
-            (function(){
-              try {
-                var stored;
-                Object.defineProperty(window, "__DSH_BOOT__", {
-                  configurable: true,
-                  get: function(){ return stored; },
-                  set: function(v){
-                    try {
-                      if (v && Array.isArray(v.entries) && Array.isArray(v.batches)) {
-                        v.entries.push({
-                          id: "$MOBILE_PLUGIN_ID",
-                          url: "$MOBILE_PLUGIN_URL",
-                          rev: "$MOBILE_PLUGIN_REV",
-                          inject: [],
-                          external: []
-                        });
-                        v.batches.push({
-                          phase: "application",
-                          url: "$MOBILE_PLUGIN_URL",
-                          rev: "$MOBILE_PLUGIN_REV",
-                          entries: ["$MOBILE_PLUGIN_ID"]
-                        });
-                      }
-                    } catch(e) {}
-                    stored = v;
-                  }
-                });
-              } catch(e) {}
-            })();
-        """.trimIndent()
+
+        /**
+         * 读注入引导脚本（assets 单一来源），把占位符换成上面的常量。
+         *
+         * 脚本内容放在 `assets/plugins/mobile-bootstrap.js` 而不是这里的裸字符串：
+         * 验证 harness（scripts/ui-verify.mjs）必须与 App 执行**逐字相同**的引导逻辑，
+         * 两份副本一定会漂移。现在两边读同一份文件，只各自填占位符；常量是否一致由
+         * CI 不变量守着。
+         */
+        fun mobileBootstrapJs(assets: android.content.res.AssetManager): String =
+            assets.open("plugins/mobile-bootstrap.js").use { it.readBytes() }
+                .toString(Charsets.UTF_8)
+                .replace("{{ID}}", MOBILE_PLUGIN_ID)
+                .replace("{{URL}}", MOBILE_PLUGIN_URL)
+                .replace("{{REV}}", MOBILE_PLUGIN_REV)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -288,7 +272,18 @@ class MainActivity : Activity() {
                 useWideViewPort = true
             }
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                WebViewCompat.addDocumentStartJavaScript(this, MOBILE_PLUGIN_JS, setOf("*"))
+                // 引导脚本从 assets 读入（单一来源，与验证 harness 共用同一份文件）
+                val bootstrap = try {
+                    // 显式限定接收者：这里的 apply 块接收者是 WebView，不写全会在
+                    // 外层作用域里去找 assets，读起来容易误会。
+                    mobileBootstrapJs(this@MainActivity.assets)
+                } catch (e: Exception) {
+                    Log.e(TAG, "读取 mobile-bootstrap.js 失败，移动端适配将不生效：${e.message}")
+                    null
+                }
+                if (bootstrap != null) {
+                    WebViewCompat.addDocumentStartJavaScript(this, bootstrap, setOf("*"))
+                }
             }
             webViewClient = object : WebViewClient() {
                 // 拦截 dsh-web-mobile 插件 bundle：返回 APK assets 里的客户端脚本

@@ -125,7 +125,9 @@ dsh-handheld/
 │   ├── build-dropbear.sh                     # 交叉编译 dropbear dbclient
 │   ├── localoptions.h                        # dropbear 裁剪配置
 │   ├── push-via-api.py                       # 增量推送（git 传输不可用时）
-│   └── mirror-via-api.py                     # 整树镜像推送（重命名/删除时更稳）
+│   ├── mirror-via-api.py                     # 整树镜像推送（重命名/删除时更稳）
+│   ├── check-mobile-hooks.mjs                # 移动端适配契约金丝雀（CI 门禁）
+│   └── ui-verify.mjs                         # 真实页面渲染验证（手机视口，需联网浏览器）
 ├── docs/
 │   ├── known-issues.md                       # 已知问题与行为记录
 │   ├── terminal-rewrite-plan.md              # 终端自研计划（已中止，只留结论）
@@ -274,6 +276,26 @@ dsh 官方 Web 前端是桌面布局，窄屏下侧栏会常驻挤占内容。�
 `shouldInterceptRequest` 从 APK assets 返回插件 bundle，**服务端不需要装任何插件**。
 
 > 该项目是第三方作品，其许可证见 `android/app/src/main/assets/plugins/LICENSE-dsh-web-mobile.txt`。
+
+**适配建立在 dsh 的一组 DOM 属性之上**（`data-phase` / `data-composer-input` /
+`data-slot` / `data-shell-overlay` / `data-conversation-composer-overlay` / `data-testid`），
+而这些属性**没有版本契约** —— dsh 独立演进，插件是我们 vendor 下来钉死的。dsh 改个属性名，
+适配就**静默失效**（抽屉不弹、布局错位），只能在手机上发现。
+
+因此有**契约金丝雀**在 CI 里守着：`node scripts/check-mobile-hooks.mjs --contract`
+断言插件实际读取的钩子与提交在仓库里的
+`assets/plugins/mobile-hooks-contract.json` 完全一致 —— 重新 vendoring 若多依赖了
+没验证过的钩子，CI 直接失败。
+
+**升级 dsh 之后**请在本机跑一次完整检查（需要装着 dsh 的环境）：
+
+```sh
+node scripts/check-mobile-hooks.mjs
+```
+
+它会逐个断言这些钩子在当前 dsh 前端里确实存在。完整说明与「真实页面渲染验证」
+（`scripts/ui-verify.mjs`，手机视口 + A/B 对照 + 截图）见
+[`docs/mobile-ui-verification.md`](docs/mobile-ui-verification.md)。
 
 > ⚠️ **对上游产物打了唯一一处补丁**：摘掉上游 v2.4.0 新增的「删除会话」菜单项——它的宿主
 > 半边（`POST /api/mobile-nav.session.delete`）在「服务端零改动」的前提下不存在，点它只会报

@@ -1,0 +1,24 @@
+{
+  "note": "移动端适配所依赖的 dsh DOM 钩子。由 scripts/check-mobile-hooks.mjs 维护；CI 用 --contract 模式校验插件与它一致，完整检查需在本机装有 dsh 时运行。",
+  "verifiedAgainst": {
+    "dsh": "0.1.5-rc.2",
+    "date": "2026-09-11"
+  },
+  "dshHooks": [
+    "data-composer-input",
+    "data-conversation-composer-overlay",
+    "data-phase",
+    "data-shell-overlay",
+    "data-slot",
+    "data-testid"
+  ],
+  "otherHostHooks": [
+    "data-aionui-explorer-col",
+    "data-aionui-preview-col",
+    "data-dsh-market-root",
+    "data-dsh-ssh-entry",
+    "data-dsh-taskboard-entry",
+    "data-genui",
+    "data-gitgraph-chip-anchor"
+  ]
+}
