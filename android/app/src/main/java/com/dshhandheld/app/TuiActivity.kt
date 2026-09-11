@@ -21,7 +21,6 @@ import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
-import org.json.JSONObject
 import java.io.File
 
 /**
@@ -169,17 +168,16 @@ class TuiActivity : Activity() {
         }
 
         val prefs = getSharedPreferences("dsh-handheld", MODE_PRIVATE)
-        val rawSsh = SecurePrefs.getString(prefs, "ssh_json")
-        val cfg = rawSsh?.let { runCatching { JSONObject(it) }.getOrNull() }
-        val host = cfg?.optString("sshHost") ?: ""
-        val user = cfg?.optString("sshUser") ?: ""
-        val port = cfg?.optInt("sshPort", 22) ?: 22
-        val password = cfg?.optString("password", "")
-        val authType = cfg?.optString("authType", "password") ?: "password"
-        if (cfg == null || host.isBlank() || user.isBlank()) {
+        val cfg = SshConfig.load(prefs)
+        if (cfg == null || !cfg.isComplete) {
             statusView?.text = "未配置 SSH，请先回连接屏填写"
             return
         }
+        val host = cfg.host
+        val user = cfg.user
+        val port = cfg.port
+        val password = cfg.password
+        val authType = cfg.authType
 
         // 认证方式：
         //  - password（默认）：DROPBEAR_PASSWORD 环境变量（补丁后 getpass 不再需要，
@@ -193,7 +191,7 @@ class TuiActivity : Activity() {
         val keyArgs: Array<String>
         val homeDir = filesDir.absolutePath   // dbclient 写 known_hosts/.ssh 用（避免落到 /data/.ssh 报权限）
         val baseEnv = arrayOf("HOME=$homeDir", "TERM=xterm-256color")
-        if (authType == "key") {
+        if (authType == SshConfig.AUTH_KEY) {
             val keyPath = resolveKeyPath() ?: run {
                 statusView?.text = "SSH 密钥不可用，请回连接屏导入私钥"
                 return
@@ -273,10 +271,7 @@ class TuiActivity : Activity() {
     private fun resolveKeyPath(): String? {
         val libDir = applicationInfo.nativeLibraryDir
         // 1) 连接屏导入的私钥
-        val imported = SecurePrefs
-            .getString(getSharedPreferences("dsh-handheld", MODE_PRIVATE), "ssh_json")?.let {
-                runCatching { JSONObject(it) }.getOrNull()
-            }?.optString("keyPath", "")
+        val imported = SshConfig.load(getSharedPreferences("dsh-handheld", MODE_PRIVATE))?.keyPath
         if (!imported.isNullOrBlank() && File(imported).exists()) return imported
 
         // 2) 自动生成一对（app 私有目录），公钥一行提示加到服务端

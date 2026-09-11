@@ -34,7 +34,6 @@ import android.widget.TextView
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.dshhandheld.protocol.SshTunnel
-import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -313,9 +312,7 @@ class MainActivity : Activity() {
         val currentUrl = webView?.url
         val baseMatch = savedUrl != null && currentUrl != null &&
             currentUrl.trimEnd('/').startsWith(savedUrl.trimEnd('/'))
-        val sshSaved = SecurePrefs.getString(prefs, "ssh_json")?.let {
-            runCatching { JSONObject(it) }.getOrNull()
-        }?.takeIf { it.optString("sshHost").isNotBlank() && it.optString("sshUser").isNotBlank() }
+        val sshSaved = SshConfig.load(prefs)?.takeIf { it.isComplete }
         // 三分支判定是「重开 App 走哪条路」的唯一决策点，此前零日志：
         // 出问题时（白屏 / 意外重连 / 该重连却没重连）无法从日志判断走了哪条。
         Log.i(TAG, "onCreate: savedUrl=$savedUrl currentUrl=$currentUrl baseMatch=$baseMatch " +
@@ -341,10 +338,8 @@ class MainActivity : Activity() {
 
     /** 启动时从保存的 SSH 配置恢复隧道，成功后把 WebView 指向新的本地端口 URL。 */
     private fun autoConnectSsh() {
-        val savedSsh = SecurePrefs.getString(prefs, "ssh_json")?.let {
-            try { JSONObject(it) } catch (_: Exception) { null }
-        } ?: run { connectView?.visibility = View.VISIBLE; return }
-        if (savedSsh.optString("sshHost").isBlank() || savedSsh.optString("sshUser").isBlank()) {
+        val savedSsh = SshConfig.load(prefs)
+        if (savedSsh == null || !savedSsh.isComplete) {
             connectView?.visibility = View.VISIBLE; return
         }
         val app = application as DshApp
@@ -353,12 +348,10 @@ class MainActivity : Activity() {
         status("自动重建 SSH 隧道…")
         connectView?.visibility = View.VISIBLE
         Log.i(TAG, "autoConnectSsh: 冷启动恢复 " +
-            "${savedSsh.optString("sshUser")}@${savedSsh.optString("sshHost")}:" +
-            "${savedSsh.optInt("sshPort", 22)} → 远端 ${savedSsh.optInt("remotePort", 3080)} " +
-            "auth=${savedSsh.optString("authType", "password")}")
+            "${savedSsh.user}@${savedSsh.host}:${savedSsh.port} → " +
+            "远端 ${savedSsh.remoteHost}:${savedSsh.remotePort} auth=${savedSsh.authType}")
         Thread {
-            val keyPath = savedSsh.optString("keyPath", "")
-            if (savedSsh.optString("authType", "password") == "key" && keyPath.isBlank()) {
+            if (savedSsh.usesKey && savedSsh.keyPath.isBlank()) {
                 Log.w(TAG, "autoConnectSsh: 私钥路径为空，放弃自动恢复")
                 runOnUiThread { status("私钥路径为空，请到连接屏重新填写"); endConnect() }
                 return@Thread
@@ -376,9 +369,8 @@ class MainActivity : Activity() {
             // 自动获取最新 token（服务重启后旧 token 失效；失败静默回退）
             autoFetchToken(tunnel)
             runOnUiThread {
-                prefs.edit().putString("url", base).apply()
+                // lastUrl 与 prefs["url"] 由 connectWeb 自己写，这里不必再来一遍。
                 connectView?.visibility = View.GONE
-                lastUrl = base
                 sshTokenAck = false
                 connectWeb(base)
                 refreshConnectState()
@@ -514,9 +506,8 @@ class MainActivity : Activity() {
         var step3Card: LinearLayout? = null   // 连接中
         var connectMainBtn: Button? = null    // 底部主按钮（每步复用）
         var webMode = true
-        val savedSsh = SecurePrefs.getString(prefs, "ssh_json")?.let {
-            try { JSONObject(it) } catch (_: Exception) { null }
-        }
+        // 预填用：这里**不做完整性校验**（地址填了、账号还没填也要把地址带出来）
+        val savedSsh = SshConfig.load(prefs)
 
         // 步骤容器（后续在 card 内按顺序 addView）
         fun stepLabel(text: String): TextView =
@@ -597,8 +588,8 @@ class MainActivity : Activity() {
             rowParams(top = dp(2), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         step2Card!!.addView(label("电脑地址"), rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        val sshHostInput = input("IP 地址", savedSsh?.optString("sshHost") ?: "")
-        val sshPortInput = input("22", savedSsh?.optString("sshPort") ?: "22", number = true)
+        val sshHostInput = input("IP 地址", savedSsh?.host ?: "")
+        val sshPortInput = input("22", savedSsh?.port?.toString() ?: "22", number = true)
         val sshHostRow = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(sshHostInput, LinearLayout.LayoutParams(0, dp(42), 3f).apply { marginEnd = dp(8) })
@@ -608,7 +599,7 @@ class MainActivity : Activity() {
         step2Card!!.addView(stepHint("端口一般用 22，不用改。"), rowParams(top = dp(4), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         step2Card!!.addView(label("登录账号"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        val sshUserInput = input("用户名", savedSsh?.optString("sshUser") ?: "")
+        val sshUserInput = input("用户名", savedSsh?.user ?: "")
         step2Card!!.addView(sshUserInput, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         // 登录方式（主区常显）：密码 / 私钥 —— 选哪个就显示哪一套字段
@@ -624,7 +615,7 @@ class MainActivity : Activity() {
 
         // 密码分支：标题 + 输入框打包，随登录方式整体显隐
         //（此前标题无条件显示、输入框单独 GONE，选私钥后主区会剩一个空标题）
-        val sshPassInput = input("密码", savedSsh?.optString("password") ?: "", pwd = true)
+        val sshPassInput = input("密码", savedSsh?.password ?: "", pwd = true)
         val passRow = pwdRow(sshPassInput)
         val passBlock = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
@@ -634,7 +625,7 @@ class MainActivity : Activity() {
         step2Card!!.addView(passBlock, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         // 私钥分支
-        val keyPathInput = input("点「导入」选文件，或直接填路径", savedSsh?.optString("keyPath") ?: "")
+        val keyPathInput = input("点「导入」选文件，或直接填路径", savedSsh?.keyPath ?: "")
         keyPathInput.isFocusable = true
         sshKeyPathInput = keyPathInput
         val browseKeyBtn = UiKit.button(this@MainActivity, "导入", UiKit.Style.SECONDARY, textSize = 12f) {
@@ -645,7 +636,7 @@ class MainActivity : Activity() {
             addView(keyPathInput, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
             addView(browseKeyBtn, LinearLayout.LayoutParams(dp(56), dp(42)))
         }
-        val keyPassInput = input("没有就留空", savedSsh?.optString("keyPass") ?: "", pwd = true)
+        val keyPassInput = input("没有就留空", savedSsh?.keyPass ?: "", pwd = true)
         val keyPassRow = pwdRow(keyPassInput)
         val keyBlock = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
@@ -657,8 +648,8 @@ class MainActivity : Activity() {
         step2Card!!.addView(keyBlock, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         // 认证方式切换：两套字段整体显隐（无折叠区，不会出现「字段藏在别处」的状态）
-        val savedAuthType = savedSsh?.optString("authType", "password") ?: "password"
-        if (savedAuthType == "key") authKeyBtn.isChecked = true
+        val savedAuthType = savedSsh?.authType ?: SshConfig.AUTH_PASSWORD
+        if (savedAuthType == SshConfig.AUTH_KEY) authKeyBtn.isChecked = true
         fun syncAuthFields() {
             val key = authKeyBtn.isChecked
             passBlock.visibility = if (key) View.GONE else View.VISIBLE
@@ -675,7 +666,7 @@ class MainActivity : Activity() {
         step2Card!!.addView(label("dsh 端口"), rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
         val sshTargetPortInput = input(
             "3080",
-            (savedSsh?.optInt("remotePort", DEFAULT_PORT.toInt()) ?: DEFAULT_PORT.toInt()).toString(),
+            (savedSsh?.remotePort ?: DEFAULT_PORT.toInt()).toString(),
             number = true
         )
         step2Card!!.addView(sshTargetPortInput, rowParams(top = dp(6), width = ViewGroup.LayoutParams.MATCH_PARENT))
@@ -793,11 +784,10 @@ class MainActivity : Activity() {
 
 
         // 上次连接摘要（单行，非空时显示）
-        savedSsh?.takeIf { it.optString("sshHost").isNotBlank() }?.let {
+        savedSsh?.takeIf { it.host.isNotBlank() }?.let {
             card.addView(UiKit.singleLineText(
                 this@MainActivity,
-                "上次连接: ${it.optString("sshUser")}@${it.optString("sshHost")}:${it.optInt("sshPort", 22)}" +
-                    " → ${it.optString("remoteHost", "127.0.0.1")}:${it.optInt("remotePort", 3080)}",
+                "上次连接: ${it.user}@${it.host}:${it.port} → ${it.remoteHost}:${it.remotePort}",
                 10f, COL_DIM, Gravity.CENTER
             ), rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
         }
@@ -927,7 +917,7 @@ class MainActivity : Activity() {
         status("SSH 隧道建立中… $sshUser@$sshHost")
         guideStep3Show()
         val app = application as DshApp
-        val cfg = sshConfigJson(sshHost, sshPort, sshUser, remotePort, auth)
+        val cfg = buildSshConfig(sshHost, sshPort, sshUser, remotePort, auth)
         Log.i(TAG, "connectViaSsh: 手动连接（强制重建）$sshUser@$sshHost:$sshPort → 远端 $remotePort " +
             "auth=${if (auth is SshTunnel.Auth.KeyPair) "key" else "password"}")
         Thread {
@@ -967,36 +957,38 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    /** SSH 配置 → JSON。持久化与建隧道共用一份，避免两边字段走样。
-     *  同时也是 DshApp.ensureTunnel 判定「能否复用已有隧道」的输入。 */
-    private fun sshConfigJson(
+    /**
+     * 把连接屏的输入与认证信息组装成 [SshConfig]（持久化与建隧道共用一份）。
+     *
+     * 字段定义在 SshConfig —— 此前这里、`DshApp` 的指纹函数、`TuiActivity` 的
+     * dbclient 启动各写一遍，加字段漏一处就是「保存了但没生效」。
+     */
+    private fun buildSshConfig(
         sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, auth: SshTunnel.Auth
-    ): JSONObject {
-        val json = JSONObject()
-            .put("sshHost", sshHost)
-            .put("sshPort", sshPort)
-            .put("sshUser", sshUser)
-            .put("remoteHost", "127.0.0.1")
-            .put("remotePort", remotePort)
-        when (auth) {
-            is SshTunnel.Auth.Password ->
-                json.put("authType", "password").put("password", auth.password)
-            is SshTunnel.Auth.KeyPair ->
-                json.put("authType", "key")
-                    .put("keyPath", auth.privateKeyFile.absolutePath)
-                    .put("keyPass", auth.passphrase ?: "")
+    ): SshConfig {
+        val base = SshConfig(
+            host = sshHost,
+            port = sshPort,
+            user = sshUser,
+            remotePort = remotePort,
+        )
+        return when (auth) {
+            is SshTunnel.Auth.Password -> base.copy(
+                authType = SshConfig.AUTH_PASSWORD, password = auth.password
+            )
+            is SshTunnel.Auth.KeyPair -> base.copy(
+                authType = SshConfig.AUTH_KEY,
+                keyPath = auth.privateKeyFile.absolutePath,
+                keyPass = auth.passphrase ?: "",
+            )
         }
-        return json
     }
 
     private fun persistSshConfig(
         sshHost: String, sshPort: Int, sshUser: String, remotePort: Int, auth: SshTunnel.Auth
     ) {
         try {
-            SecurePrefs.putString(
-                prefs, "ssh_json",
-                sshConfigJson(sshHost, sshPort, sshUser, remotePort, auth).toString()
-            )
+            SshConfig.save(prefs, buildSshConfig(sshHost, sshPort, sshUser, remotePort, auth))
         } catch (_: Exception) {}
     }
 

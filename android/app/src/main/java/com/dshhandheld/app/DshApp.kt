@@ -4,7 +4,6 @@ import android.app.Application
 import android.util.Log
 import android.webkit.WebView
 import com.dshhandheld.protocol.SshTunnel
-import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -79,8 +78,8 @@ class DshApp : Application() {
      * 同一时刻只允许一条拨号在跑（[tunnelLock]），避免 WebView 与后台服务
      * 同时建两条隧道。
      */
-    fun ensureTunnel(cfg: JSONObject, force: Boolean = false): SshTunnel? {
-        val fp = fingerprint(cfg)
+    fun ensureTunnel(cfg: SshConfig, force: Boolean = false): SshTunnel? {
+        val fp = cfg.fingerprint()
         synchronized(tunnelLock) {
             val cur = sshTunnel
             if (!force && cur != null && tunnelFingerprint == fp && cur.isHealthy()) {
@@ -123,31 +122,17 @@ class DshApp : Application() {
         }
     }
 
-    /** 配置指纹：决定「同一条隧道能否复用」。含认证方式相关的全部字段。 */
-    private fun fingerprint(cfg: JSONObject): String = listOf(
-        cfg.optString("sshHost"), cfg.optInt("sshPort", 22).toString(),
-        cfg.optString("sshUser"), cfg.optString("remoteHost", "127.0.0.1"),
-        cfg.optInt("remotePort", 3080).toString(), cfg.optString("authType", "password"),
-        cfg.optString("password"), cfg.optString("keyPath"), cfg.optString("keyPass")
-    ).joinToString("\u0000")
-
-    private fun build(cfg: JSONObject): SshTunnel? {
-        val host = cfg.optString("sshHost")
-        val user = cfg.optString("sshUser")
-        if (host.isBlank() || user.isBlank()) return null
-        val auth = if (cfg.optString("authType", "password") == "key") {
-            val keyPath = cfg.optString("keyPath", "")
-            if (keyPath.isBlank()) return null
-            SshTunnel.Auth.KeyPair(File(keyPath), cfg.optString("keyPass").ifEmpty { null })
-        } else {
-            SshTunnel.Auth.Password(cfg.optString("password", ""))
-        }
+    /** 配置指纹由 [SshConfig.fingerprint] 提供（字段定义在那里，不再各写一份）。 */
+    private fun build(cfg: SshConfig): SshTunnel? {
+        if (!cfg.isComplete) return null
+        // 私钥方式但没给路径 → 配置不可用（终端模式另有「现生成一对」的回退，不在此列）
+        val auth = cfg.toAuth() ?: return null
         return SshTunnel(
-            sshHost = host,
-            sshPort = cfg.optInt("sshPort", 22),
-            sshUser = user,
-            remoteHost = cfg.optString("remoteHost", "127.0.0.1"),
-            remotePort = cfg.optInt("remotePort", 3080),
+            sshHost = cfg.host,
+            sshPort = cfg.port,
+            sshUser = cfg.user,
+            remoteHost = cfg.remoteHost,
+            remotePort = cfg.remotePort,
             auth = auth,
             // WebView 的 origin 是 http://127.0.0.1:<port>，所以端口必须稳定
             // （3080 优先）；见 SshTunnel.pickFreePort。
