@@ -1,7 +1,10 @@
 # 终端自研计划（Termux 替换）
 
-> 状态：**计划阶段，未开工**。目标是把 SSH 终端模式里依赖 Termux 的三层
+> 状态：**阶段 0 已完成并合入**（差异测试台，CI 门禁已生效）；
+> 阶段 1–5 未开工。目标是把 SSH 终端模式里依赖 Termux 的三层
 > （native pty / emulator 核心 / 视图层）全部换成自研实现。
+>
+> 阶段 0 的实测结果见 [`android/terminal-conformance/README.md`](../android/terminal-conformance/README.md)。
 >
 > 背景与动机见本文「为什么」；许可证方面的结论（**其实不必为了许可证重写**）见
 > [`LICENSE-audit`](#附许可证核对结论)。
@@ -91,14 +94,19 @@ android/terminal-conformance/          # 纯 JVM 测试模块（不进 APK）
 
 每阶段都有**可验证的完成标志**，且尽量做到「不破坏现有可用版本」。
 
-### 阶段 0：差异测试台
+### 阶段 0：差异测试台 ✅ 已完成
 
 | | |
 |---|---|
-| 产出 | `terminal-conformance` 模块 + 语料 + CI 任务 |
-| 完成标志 | ① Termux 对自己 = **0 差异**（证明测试台本身无 bug）；② 语料覆盖 ≥ 12 个真实程序；③ CI 上一条命令给出「N/M 一致」 |
-| 规模 | 小（~500 行测试代码），但杠杆最高 |
-| 风险 | 低 |
+| 产出 | `android/terminal-conformance`（纯 JVM 模块）+ 52 用例语料 + CI 任务 `conformance` |
+| 状态 | **已合入**（commit `fac7862`），CI 全绿 |
+| 完成标志 | ① Termux 对自己 = **0 差异**（`check` 52/52，分片喂入下逐片一致）✅；② 语料含 **12 个真实程序** pty 录制（ls/man/top/htop/vi/less/git/dpkg/find/bash/tput/watch）✅；③ CI 一条命令给出「N/M 一致」✅ |
+| 额外收获 | `selftest` 证明测试台**会失败**——这条最初不通过（49/52），暴露出三个真实缺陷：只比末屏会漏中间状态、一次性喂入没测序列跨包、覆盖率统计用错解码。详见模块 README |
+| 规模 | 实际约 1,500 行 Java + 290 行生成器 + 54 行捕获脚本 |
+
+**阶段 0 让后面每个阶段都有判据**：`coverage` 防止语料空转，`selftest` 防止测试台
+失去失败能力，`check` 给出「N/M 一致」。加入自研实现只需在
+`Harness.implementations()` 注册一行。
 
 ### 阶段 1：native pty
 
