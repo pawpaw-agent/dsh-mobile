@@ -52,6 +52,20 @@ jobs:
           fi
           echo "✓ :app does not depend on :terminal-conformance"
 
+  # Behavioural test for the native pty layer. Needs no Android SDK and no NDK
+  # download: the pty core is plain POSIX, so it runs on the runner's own compiler.
+  # This is where fd leaks, SIGWINCH/window-size propagation and the exit-status
+  # encoding are actually asserted — an Android cross-build can only prove it links.
+  pty-test:
+    name: Native pty host test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile and run the pty host test
+        run: ./scripts/test-pty.sh
+
   build-dropbear:
     name: Build dropbear dbclient (arm64)
     runs-on: ubuntu-latest
@@ -78,7 +92,9 @@ jobs:
   build:
     name: Build debug APK
     runs-on: ubuntu-latest
-    needs: build-dropbear
+    # Gate the release artifact on the fast checks: there is no point producing an
+    # APK if the terminal harness or the pty behaviour test already failed.
+    needs: [build-dropbear, conformance, pty-test]
 
     steps:
       - uses: actions/checkout@v4
@@ -91,6 +107,17 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+
+      # Pinned rather than discovered: the native build needs both an NDK and CMake,
+      # and letting AGP guess means either a surprise download or an opaque
+      # "NDK not configured" failure. The version is handed to Gradle through the
+      # environment so the build script and this step cannot drift apart.
+      - name: Install NDK and CMake for the native pty layer
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --install "ndk;25.1.8937393" "cmake;3.22.1" > /dev/null
+          echo "ANDROID_NDK_VERSION=25.1.8937393" >> "$GITHUB_ENV"
+          echo "installed ndk;25.1.8937393 cmake;3.22.1"
 
       - name: Set up Gradle 8.5
         uses: gradle/actions/setup-gradle@v3
@@ -155,6 +182,23 @@ jobs:
           fi
           echo "✓ application-debuggable 不存在（不可调试）"
           "$AAPT" dump badging "$APK" | grep -E "^package|^application-label|sdkVersion|targetSdkVersion"
+
+      # Hard check: the packaged pty library must be OUR build, not the upstream one
+      # that also ships inside terminal-emulator's AAR. Both are called libtermux.so,
+      # so "which one won" is decided by AGP's merge and cannot be assumed — the build
+      # marker makes it a fact.
+      - name: Verify the packaged pty library is the in-house build
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          rm -rf /tmp/apkx && mkdir -p /tmp/apkx
+          unzip -o -q "$APK" 'lib/*/libtermux.so' -d /tmp/apkx
+          SO="$(find /tmp/apkx -name libtermux.so | head -n1)"
+          test -n "$SO" || { echo "::error::APK 内没有 libtermux.so"; exit 1; }
+          if ! grep -qa "dsh-handheld-pty/" "$SO"; then
+            echo "::error::libtermux.so 不含自研构建标记——pickFirsts 选中了 upstream 版本"
+            exit 1
+          fi
+          echo "✓ libtermux.so 是自研 pty（含构建标记），$(stat -c%s "$SO") 字节"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
