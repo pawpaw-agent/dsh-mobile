@@ -39,9 +39,8 @@ class DshApp : Application() {
     var sshTunnel: SshTunnel? = null
         private set
 
-    /** 隧道状态/基址变化的订阅者（目前只有 MainActivity 订阅）。 */
+    /** 隧道基址变化的订阅者（目前只有 MainActivity 订阅）。 */
     interface TunnelObserver {
-        fun onTunnelState(state: String) {}
         fun onTunnelBaseChanged(base: String) {}
     }
 
@@ -90,8 +89,9 @@ class DshApp : Application() {
 
             val t = build(cfg) ?: return null
             t.onStateChange = { s ->
+                // 只记日志：状态条由 ①②③ 引导流程表达，connecting/connected 属内部
+                // 状态（曾显示为「隧道: connected」，是术语）。
                 Log.i(TAG, "tunnel state: $s")
-                tunnelObservers.forEach { it.onTunnelState(s) }
             }
             t.onLocalBaseChanged = { b ->
                 Log.i(TAG, "tunnel base changed: $b")

@@ -67,12 +67,6 @@ class MainActivity : Activity() {
      * onDestroy 必须反注册（观察者持有 Activity 引用）。
      */
     private val tunnelObserver = object : DshApp.TunnelObserver {
-        override fun onTunnelState(state: String) {
-            // 刻意不写状态条：guided 流程用 ①②③ 表达进度，这里的
-            // connecting/connected 属内部状态（曾显示为「隧道: connected」，是术语）。
-            // 需要排查时看 DshApp 的日志。
-        }
-
         override fun onTunnelBaseChanged(base: String) {
             runOnUiThread {
                 lastUrl = base
@@ -119,13 +113,11 @@ class MainActivity : Activity() {
         // 黑白色调
         const val TAG = "DshHandheld"
         const val COL_BG = 0xFF0A0A0E.toInt()
-        const val COL_SURFACE = 0xFF101015.toInt()
         const val COL_TEXT = 0xFFF5F5F7.toInt()
         const val COL_TITLE = 0xFFF5F5F7.toInt()
         const val COL_MUTED = 0x99FFFFFF.toInt()
         const val COL_DIM = 0x55FFFFFF.toInt()
         const val COL_HINT = 0x66FFFFFF.toInt()
-        const val COL_INPUT_BG = 0x14FFFFFF.toInt()
         const val COL_ACCENT = 0xFFF5F5F7.toInt()
         const val COL_ACCENT_TEXT = 0xFF0A0A0E.toInt()
         const val COL_ERROR = 0xFFFF6B6B.toInt()
@@ -133,7 +125,6 @@ class MainActivity : Activity() {
         const val DEFAULT_PORT = "3080"
         const val REQ_PICK_KEY = 2001
 
-        const val PREF_SSH_ENABLED = "ssh_enabled" // 是否经 SSH 隧道连接（唯一模式）
         const val PREF_SERVER_TOKEN = "server_token" // dsh 0.1.2+ 一次性启动 token（服务重启后自动更新）
 
         // ── 移动端适配插件（dsh-web-mobile, MIT, github.com/mexiaosqwq/dsh-web-mobile）──
@@ -332,7 +323,7 @@ class MainActivity : Activity() {
         if (savedUrl != null && !baseMatch) {
             if (sshSaved != null) {
                 Log.i(TAG, "onCreate: 分支2 冷启动重连（WebView 不在保存的基址上 + ssh 配置可用）")
-                autoConnectSsh(savedUrl)
+                autoConnectSsh()
             } else {
                 Log.i(TAG, "onCreate: 分支3 停留连接屏（有 url 但 ssh 配置不可用）")
                 connectView?.visibility = View.VISIBLE
@@ -346,7 +337,7 @@ class MainActivity : Activity() {
     }
 
     /** 启动时从保存的 SSH 配置恢复隧道，成功后把 WebView 指向新的本地端口 URL。 */
-    private fun autoConnectSsh(@Suppress("UNUSED_PARAMETER") savedUrl: String?) {
+    private fun autoConnectSsh() {
         val savedSsh = SecurePrefs.getString(prefs, "ssh_json")?.let {
             try { JSONObject(it) } catch (_: Exception) { null }
         } ?: run { connectView?.visibility = View.VISIBLE; return }
@@ -728,7 +719,6 @@ class MainActivity : Activity() {
             setTextColor(COL_ACCENT_TEXT)
             setBackgroundResource(R.drawable.bg_button_primary)
             setOnClickListener {
-                prefs.edit().putBoolean(PREF_SSH_ENABLED, true).apply()
                 sshTokenAck = false
 
                 // 校验
@@ -968,7 +958,7 @@ class MainActivity : Activity() {
      * 注意：SSH 隧道断线重连会换本地端口（cookie 按 host:port 绑定失效），
      * 此时 [sshTokenAck] 为 false，会重新走 token 交换。
      */
-    private fun connectWeb(url: String, forceToken: Boolean = false) {
+    private fun connectWeb(url: String) {
         status("连接中… $url")
         connectView?.visibility = View.GONE
         lastUrl = url
@@ -976,10 +966,10 @@ class MainActivity : Activity() {
         loadRetriesLeft = 3
         prefs.edit().putString("url", url).apply()
         val token = SecurePrefs.getString(prefs, PREF_SERVER_TOKEN)?.trim().orEmpty()
-        val needsToken = token.isNotEmpty() && (forceToken || !sshTokenAck)
+        val needsToken = token.isNotEmpty() && !sshTokenAck
         // 认证决策是 401/431 类问题的第一现场：是否带 token、cookie jar 是否清了、
         // 最终请求的 URL 长什么样，全部留痕（token 本身不记，只记长度）。
-        Log.i(TAG, "connectWeb: url=$url forceToken=$forceToken ack=$sshTokenAck " +
+        Log.i(TAG, "connectWeb: url=$url ack=$sshTokenAck " +
             "tokenLen=${token.length} needsToken=$needsToken")
         if (needsToken) {
             // 431 修复（实测根因）：每次 token 交换 WebView 会追加一个 365 天有效的
