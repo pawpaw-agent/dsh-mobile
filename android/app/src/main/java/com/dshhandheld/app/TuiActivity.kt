@@ -154,10 +154,11 @@ class TuiActivity : Activity() {
     }
 
     /**
-     * 构造 dbclient 参数并让 TerminalSession 启动它。
-     *  - dbclient 二进制：nativeLibraryDir（APK 内 libdbclient.so，extractNativeLibs
-     *    时系统会解压到该目录且可执行）。
-     *  - argv[0] = 程序名（JNI execvp 约定）。
+     * 终端模式入口：先做不阻塞的校验，再把**会 fork 进程的部分**挪到后台线程。
+     *
+     * 私钥分支要跑 dropbearkey（`-t ed25519` 生成密钥，`-y` 读公钥），两处都要
+     * `waitFor()` / 读子进程输出 —— 放在主线程就是阻塞 I/O，首次用私钥登录时最明显。
+     * 密码分支不 fork，直接继续。
      */
     private fun startDbclient() {
         val libDir = applicationInfo.nativeLibraryDir
@@ -167,56 +168,63 @@ class TuiActivity : Activity() {
             return
         }
 
-        val prefs = getSharedPreferences("dsh-handheld", MODE_PRIVATE)
-        val cfg = SshConfig.load(prefs)
+        val cfg = SshConfig.load(getSharedPreferences("dsh-handheld", MODE_PRIVATE))
         if (cfg == null || !cfg.isComplete) {
             statusView?.text = "未配置 SSH，请先回连接屏填写"
             return
         }
-        val host = cfg.host
-        val user = cfg.user
-        val port = cfg.port
-        val password = cfg.password
-        val authType = cfg.authType
 
-        // 认证方式：
-        //  - password（默认）：DROPBEAR_PASSWORD 环境变量（补丁后 getpass 不再需要，
-        //    与 Termux 原版 ssh 体验一致）。
-        //  - key：-i 导入的私钥；缺私钥时尝试自动生成（dropbearkey）。
-        //
         // TERM 必须传：TerminalSession 用给定 env 启动 dbclient（不继承父进程），
         // 缺少 TERM 时远端 bash 的 tput setaf 探测失败 → color_prompt=no → 无颜色。
         // xterm-256color 让远端提示符 / ls / dircolors 全部恢复彩色。
-        val env: Array<String>?
-        val keyArgs: Array<String>
-        val homeDir = filesDir.absolutePath   // dbclient 写 known_hosts/.ssh 用（避免落到 /data/.ssh 报权限）
-        val baseEnv = arrayOf("HOME=$homeDir", "TERM=xterm-256color")
-        if (authType == SshConfig.AUTH_KEY) {
-            val keyPath = resolveKeyPath() ?: run {
-                statusView?.text = "SSH 密钥不可用，请回连接屏导入私钥"
-                return
-            }
-            env = baseEnv
-            keyArgs = arrayOf("-i", keyPath)
-        } else {
-            env = baseEnv + "DROPBEAR_PASSWORD=$password"
-            keyArgs = arrayOf()
-        }
+        // HOME 指向 filesDir：dbclient 在此写 known_hosts/.ssh（避免落到 /data/.ssh 报权限），
+        // 且与 SshTunnel 用同一份，TOFU 信任不分裂。
+        val baseEnv = arrayOf("HOME=${filesDir.absolutePath}", "TERM=xterm-256color")
 
+        if (cfg.authType == SshConfig.AUTH_KEY) {
+            // 认证方式：-i 导入的私钥；缺私钥时尝试自动生成（dropbearkey）。
+            statusView?.text = "准备 SSH 密钥…"
+            Thread {
+                val keyPath = resolveKeyPath()
+                runOnUiThread {
+                    if (isDestroyed) return@runOnUiThread
+                    if (keyPath == null) {
+                        statusView?.text = "SSH 密钥不可用，请回连接屏导入私钥"
+                    } else {
+                        launchSession(dbclient, cfg, baseEnv, arrayOf("-i", keyPath))
+                    }
+                }
+            }.apply { isDaemon = true; name = "ssh-key-resolve"; start() }
+        } else {
+            // 密码（默认）：DROPBEAR_PASSWORD 环境变量（补丁后 getpass 不再需要，
+            // 与 Termux 原版 ssh 体验一致）。
+            launchSession(dbclient, cfg, baseEnv + "DROPBEAR_PASSWORD=${cfg.password}", arrayOf())
+        }
+    }
+
+    /**
+     * 构造 dbclient 参数并让 TerminalSession 启动它（主线程）。
+     *  - dbclient 二进制：nativeLibraryDir（APK 内 libdbclient.so，extractNativeLibs
+     *    时系统会解压到该目录且可执行）。
+     *  - argv[0] = 程序名（JNI execvp 约定）。
+     */
+    private fun launchSession(
+        dbclient: File, cfg: SshConfig, env: Array<String>, keyArgs: Array<String>
+    ) {
         val args = arrayOf(
             dbclient.absolutePath,
-            "-p", port.toString(),
+            "-p", cfg.port.toString(),
             "-y",                 // 首连接受未知主机公钥（TOFU，与现有行为一致）
             "-t",                 // 分配 pty（交互终端）
             *keyArgs,
-            "$user@$host"
+            "${cfg.user}@${cfg.host}"
         )
         // 只记 env 的**键名**，不记值：DROPBEAR_PASSWORD 的值就是登录密码。
         // （原写法 `it.take(8)` 恰好只截到 "DROPBEAR" 这个键名而侥幸没泄漏密码，
         //  但缩短键名/换认证方式就会漏 —— 不能靠运气。）
-        Log.i(TAG, "dbclient: args=${args.toList()} envKeys=${env?.map { it.substringBefore('=') } ?: "key"}")
+        Log.i(TAG, "dbclient: args=${args.toList()} envKeys=${env.map { it.substringBefore('=') }}")
 
-        statusView?.text = "连接 $user@$host:$port …"
+        statusView?.text = "连接 ${cfg.user}@${cfg.host}:${cfg.port} …"
         val client = object : TerminalSessionClient {
             // Termux 同款：新数据到达必须 onScreenUpdated() → invalidate() + 滚回底部，
             // 否则字节进了 emulator 但没人重绘，只能等光标闪烁（500ms）时机性刷新 → 打字卡顿。
@@ -267,7 +275,13 @@ class TuiActivity : Activity() {
         Log.i(TAG, "dbclient started via TerminalSession")
     }
 
-    /** 返回可用的私钥路径；若无导入密钥则用 dropbearkey 生成（并提示公钥）。 */
+    /**
+     * 返回可用的私钥路径；若无导入密钥则用 dropbearkey 生成（并提示公钥）。
+     *
+     * ⚠️ **必须在后台线程调用**：内部两处 fork 子进程（生成密钥、读公钥），
+     * 并用 `waitFor()` / `readText()` 等它跑完 —— 在主线程上是阻塞 I/O。
+     * 调用点见 [startDbclient] 的私钥分支。
+     */
     private fun resolveKeyPath(): String? {
         val libDir = applicationInfo.nativeLibraryDir
         // 1) 连接屏导入的私钥
