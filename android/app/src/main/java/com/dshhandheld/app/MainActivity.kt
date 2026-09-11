@@ -239,8 +239,11 @@ class MainActivity : Activity() {
         val root = FrameLayout(this).apply { setBackgroundColor(COL_BG) }
 
         // ── WebView（保留实例，跨重建保活）────────────────────────
+        // context 由 DshApp 用 MutableContextWrapper 管理：实例保活，但 base context
+        // 每次重建都换成本次 Activity，销毁时换回 application —— 否则旧 Activity
+        // 会被这个 Application 级引用一直拖住（见 DshApp.obtainWebView）。
         val app = application as DshApp
-        webView = (app.retainedWebView ?: WebView(this).also { app.retainedWebView = it }).apply {
+        webView = app.obtainWebView(this).apply {
             (parent as? ViewGroup)?.removeView(this)
             if (!settings.userAgentString.contains(UA_MARKER)) {
                 settings.userAgentString = settings.userAgentString + " " + UA_MARKER
@@ -1220,7 +1223,11 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         Log.i(TAG, "onDestroy: isFinishing=$isFinishing（隧道由 DshApp 持有，不随 Activity 销毁）")
-        (application as? DshApp)?.removeTunnelObserver(tunnelObserver)
+        val app = application as? DshApp
+        app?.removeTunnelObserver(tunnelObserver)
+        // WebView 仍由 DshApp 保活，但必须把它的 context 从本 Activity 上摘下来，
+        // 否则旧 Activity（含整棵连接屏视图树）会被这个 Application 级引用拖住。
+        app?.releaseWebViewContext()
         super.onDestroy()
     }
 

@@ -1,6 +1,8 @@
 package com.dshhandheld.app
 
+import android.app.Activity
 import android.app.Application
+import android.content.MutableContextWrapper
 import android.util.Log
 import android.webkit.WebView
 import com.dshhandheld.protocol.SshTunnel
@@ -30,6 +32,57 @@ class DshApp : Application() {
     /** WebView 保留实例。 */
     @Volatile
     var retainedWebView: WebView? = null
+        private set
+
+    /**
+     * 保活 WebView 的 context 包装器。
+     *
+     * **为什么需要它**：WebView 必须用 Activity context 创建（WebView 的默认实现要用窗口，
+     * 例如页面里的 `confirm()` 会走 WebChromeClient 的默认对话框），但它被本 Application
+     * 长期持有。若不处理，**第一个 MainActivity 连同它整棵连接屏视图树**会随进程存活到结束
+     * —— Activity 重建（"不保留活动"、多窗口、字号/语言变更）后，旧实例也回收不掉。
+     *
+     * [MutableContextWrapper] 是官方推荐的解法：WebView 实例与它的全部状态（JS 运行时、
+     * localStorage、滚动位置）都保留，但它看到的 base context 可以跟着当前 Activity 走；
+     * Activity 销毁时换回 application，陈旧 Activity 即可被回收。
+     */
+    @Volatile
+    private var retainedWebViewContext: MutableContextWrapper? = null
+
+    /**
+     * 取得保活 WebView（首次调用时创建），并把它的 context 指向 [activity]。
+     *
+     * 每次 Activity 重建都要调一次：这正是「换掉 WebView 眼中的 Activity」的时机。
+     */
+    fun obtainWebView(activity: Activity): WebView {
+        val existing = retainedWebView
+        val wrapper = retainedWebViewContext
+        if (existing != null && wrapper != null) {
+            if (wrapper.baseContext !== activity) {
+                Log.i(TAG, "obtainWebView: 复用保活实例，context → ${activity.javaClass.simpleName}")
+                wrapper.baseContext = activity
+            }
+            return existing
+        }
+        Log.i(TAG, "obtainWebView: 首次创建")
+        val w = MutableContextWrapper(activity)
+        retainedWebViewContext = w
+        return WebView(w).also { retainedWebView = it }
+    }
+
+    /**
+     * Activity 销毁时调用：把 WebView 的 context 换回 application，释放对 Activity 的引用。
+     *
+     * 与 [obtainWebView] 配对。漏掉这一步，[MutableContextWrapper] 就等于没加。
+     */
+    fun releaseWebViewContext() {
+        retainedWebViewContext?.let {
+            if (it.baseContext !== this) {
+                Log.i(TAG, "releaseWebViewContext: context → application")
+                it.baseContext = this
+            }
+        }
+    }
 
     /**
      * 当前 SSH 隧道（唯一实例）。只由 [ensureTunnel] / [closeTunnel] 改动；
