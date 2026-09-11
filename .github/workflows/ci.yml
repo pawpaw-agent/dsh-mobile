@@ -12,6 +12,46 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Terminal conformance gate: proves the differential test bed still works.
+  # Runs first and needs no Android SDK — it is pure JVM, so it finishes in seconds
+  # and a failure here means the corpus or the harness rotted, not the app.
+  conformance:
+    name: Terminal conformance harness
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Gradle 8.5
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.5"
+
+      - name: Run conformance gate (coverage + selftest + check)
+        run: |
+          cd android
+          gradle :terminal-conformance:conformance --no-daemon
+
+      # Invariant, not a nicety: terminal-conformance contains android.util /
+      # android.graphics stand-ins so the reference emulator links on a plain JVM.
+      # If it ever became an app dependency those stubs would collide with the real
+      # framework classes, so the module must stay out of the APK's graph.
+      - name: Verify the harness stays out of the app's dependency graph
+        run: |
+          cd android
+          if gradle :app:dependencies --configuration releaseRuntimeClasspath --no-daemon \
+               | grep -q "terminal-conformance"; then
+            echo "::error:::app must never depend on :terminal-conformance (android.* stubs would enter the APK)"
+            exit 1
+          fi
+          echo "✓ :app does not depend on :terminal-conformance"
+
   build-dropbear:
     name: Build dropbear dbclient (arm64)
     runs-on: ubuntu-latest
