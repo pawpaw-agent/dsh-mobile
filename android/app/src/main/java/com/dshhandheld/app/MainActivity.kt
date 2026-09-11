@@ -9,6 +9,8 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.InputType
 import android.util.Log
 import android.view.Gravity
@@ -67,7 +69,7 @@ class MainActivity : Activity() {
      */
     private val tunnelObserver = object : DshApp.TunnelObserver {
         override fun onTunnelBaseChanged(base: String) {
-            runOnUiThread {
+            onUi {
                 // 只置 ack：lastUrl 与 prefs["url"] 由 connectWeb 自己写，这里再写一遍是重复赋值。
                 // 本地基址变了 → cookie 失效，必须重新走 token 交换。
                 sshTokenAck = false
@@ -106,6 +108,32 @@ class MainActivity : Activity() {
     /** 401 时是否已尝试过回退干净 URL（防重复回退循环；每次 connectWeb 重置）。 */
     private var unauthorizedCleanTried = false
     private lateinit var prefs: android.content.SharedPreferences
+
+    // ── 生命周期契约：本实例排的工作不得活在实例之外 ──────────────────────
+    /**
+     * 本 Activity 实例是否仍然存活。`onDestroy` 置 false。
+     *
+     * 存在的理由：本 Activity 起的工作（隧道拨号、token 抓取、页面加载重试）跑在后台线程或
+     * 延时队列上，**可能在本实例销毁之后才回来**。而它们回来时要改的东西是**共享的**——
+     * `prefs["url"]`、保活的 WebView、以及 DshApp 持有的隧道。一个已死实例去改这些状态，
+     * 就是「用户已经离开连接屏，页面却突然自己开始重载」这类问题的来源。
+     */
+    private val alive = AtomicBoolean(true)
+
+    /**
+     * 由本 Activity 拥有的主线程 Handler。
+     *
+     * 用它而不是 `webView.postDelayed(...)`：WebView 被 DshApp 保活到进程结束，把回调挂在
+     * 它身上等于把「本实例的闭包（含 Activity 引用）」存进一个永不释放的队列，而且
+     * `onDestroy` 无从取消。用自己的 Handler，销毁时一句 `removeCallbacksAndMessages(null)`
+     * 就干净了。
+     */
+    private val ui = Handler(Looper.getMainLooper())
+
+    /** 回主线程执行，但**仅在本实例仍存活时**；销毁后迟到的回调直接丢弃。 */
+    private fun onUi(block: () -> Unit) {
+        ui.post { if (alive.get()) block() }
+    }
 
     // ── 界面状态（单一真相）────────────────────────────────────────────────
     /**
@@ -408,7 +436,7 @@ class MainActivity : Activity() {
         Thread {
             if (savedSsh.usesKey && savedSsh.keyPath.isBlank()) {
                 Log.w(TAG, "autoConnectSsh: 私钥路径为空，放弃自动恢复")
-                runOnUiThread { status("私钥路径为空，请到连接屏重新填写"); endConnect() }
+                onUi { status("私钥路径为空，请到连接屏重新填写"); endConnect() }
                 return@Thread
             }
             // 非强制：后台服务可能已经用同一份配置建好了隧道，直接复用（不必重拨）
@@ -418,12 +446,12 @@ class MainActivity : Activity() {
             // 失败先退：隧道没起来就不再干跑 token 探测（4×8s 白等）
             if (tunnel == null || base == null) {
                 Log.w(TAG, "autoConnectSsh: 隧道未建立，回连接屏等用户手动重试")
-                runOnUiThread { status("自动连接失败，请在连接屏手动重试"); refreshConnectState(); endConnect() }
+                onUi { status("自动连接失败，请在连接屏手动重试"); refreshConnectState(); endConnect() }
                 return@Thread
             }
             // 自动获取最新 token（服务重启后旧 token 失效；失败静默回退）
             autoFetchToken(tunnel)
-            runOnUiThread {
+            onUi {
                 // lastUrl 与 prefs["url"] 由 connectWeb 自己写，这里不必再来一遍。
                 showScreen(Screen.WEB)
                 sshTokenAck = false
@@ -431,7 +459,7 @@ class MainActivity : Activity() {
                 refreshConnectState()
                 endConnect()
             }
-        }.start()
+        }.apply { name = "ssh-autoconnect"; isDaemon = true }.start()
     }
 
     // ── 连接屏 UI ─────────────────────────────────────────────
@@ -983,7 +1011,7 @@ class MainActivity : Activity() {
             // 失败先退：隧道没起来就不再干跑 token 探测（4×8s 白等）
             if (tunnel == null || base == null) {
                 Log.w(TAG, "connectViaSsh: 隧道建立失败")
-                runOnUiThread {
+                onUi {
                     status("隧道建立失败（检查 SSH 主机/端口/用户/认证）")
                     // 提示词跟登录方式：私钥用户看到「检查密码」会懵
                     val what = if (auth is SshTunnel.Auth.KeyPair) "私钥" else "密码"
@@ -996,10 +1024,10 @@ class MainActivity : Activity() {
                 }
                 return@Thread
             }
-            runOnUiThread { guideLine(1, "① 检查电脑 ✓ 已连上电脑", state = false) }
+            onUi { guideLine(1, "① 检查电脑 ✓ 已连上电脑", state = false) }
             // 自动获取最新 token（服务重启后旧 token 失效；失败静默回退）
             val token = autoFetchToken(tunnel)
-            runOnUiThread {
+            onUi {
                 Log.i(TAG, "connectViaSsh: token=${if (token != null) "已获取" else "未获取（仍尝试打开）"}")
                 if (token != null) guideLine(2, "② 建立安全通道 ✓ 已连通", state = false)
                 else guideLine(2, "② 建立安全通道 ⚠ 未获取令牌，仍尝试打开", state = null)
@@ -1009,7 +1037,7 @@ class MainActivity : Activity() {
                 refreshConnectState()
                 endConnect()
             }
-        }.start()
+        }.apply { name = "ssh-connect"; isDaemon = true }.start()
     }
 
     /**
@@ -1199,7 +1227,7 @@ class MainActivity : Activity() {
         status("自动获取令牌…")
         Thread {
             val token = autoFetchToken(tunnel)
-            runOnUiThread {
+            onUi {
                 // autoFetchToken 只在拿到 ≥40 字符的 token 时返回非 null，所以这里
                 // 只需判空（原先还重判了一次 length < 40，那半段不可达）。
                 if (token == null) {
@@ -1210,7 +1238,7 @@ class MainActivity : Activity() {
                     lastUrl?.let { connectWeb(it) }
                 }
             }
-        }.start()
+        }.apply { name = "token-refetch"; isDaemon = true }.start()
     }
 
     // ── 生命周期 ──────────────────────────────────────────────
@@ -1223,6 +1251,10 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         Log.i(TAG, "onDestroy: isFinishing=$isFinishing（隧道由 DshApp 持有，不随 Activity 销毁）")
+        // 先履行生命周期契约：此后所有 onUi 回调与延时任务都作废，避免一个已销毁的实例
+        // 去改共享状态（prefs["url"]、保活 WebView、DshApp 的隧道）。
+        alive.set(false)
+        ui.removeCallbacksAndMessages(null)
         val app = application as? DshApp
         app?.removeTunnelObserver(tunnelObserver)
         // WebView 仍由 DshApp 保活，但必须把它的 context 从本 Activity 上摘下来，
@@ -1396,7 +1428,14 @@ class MainActivity : Activity() {
     private fun scheduleLoadRetry() {
         if (loadRetriesLeft <= 0) return
         loadRetriesLeft--
-        webView?.postDelayed({
+        // 用本 Activity 的 Handler，而不是 webView.postDelayed：后者会把本实例的闭包
+        // 存进永不释放的保活 WebView，且 onDestroy 无从取消 —— 结果是一个已销毁的
+        // Activity 仍能触发共享 WebView 的重载。
+        ui.postDelayed({
+            if (!alive.get()) {
+                Log.i(TAG, "auto-retry 放弃：Activity 已销毁")
+                return@postDelayed
+            }
             if ((application as DshApp).sshTunnel != null && lastUrl != null) {
                 Log.i(TAG, "auto-retry page load (retriesLeft=$loadRetriesLeft) via $lastUrl")
                 sshTokenAck = false
