@@ -1,13 +1,22 @@
 # terminal-conformance
 
-Terminal 一致性测试台 —— 用**差分对照**证明自研终端与参考实现行为一致。
+终端行为回归闸门 —— 用**差分对照**证明终端实现的行为没有漂移。
 
-这是 [`docs/terminal-rewrite-plan.md`](../../docs/terminal-rewrite-plan.md) 的**阶段 0**：
+它是「终端自研」计划的**阶段 0**，但**不依赖那个计划**：自研已于 2026-09-11 中止
+（见 [`docs/terminal-rewrite-plan.md`](../../docs/terminal-rewrite-plan.md)），这个模块被保留
+下来，因为它对**任何**终端改动都成立——升级 `terminal-view`、改额外键栏、调整渲染，都在
+它的判据之内；若哪天重新考虑自研，它又是现成的起点，新实现只需在
+`Harness.implementations()` 里注册一行。
+
 它不实现任何终端功能，只回答一个问题——「什么叫做对了」。
+
+本模块是**纯 JVM**（自带 `android.util` / `android.graphics` 桩类）、**不是 `:app` 的依赖**；
+CI 里有不变量在守这条：`:app` 的 release runtime classpath 一旦出现 `terminal-conformance`，
+构建直接失败。
 
 ## 为什么需要它
 
-自研终端的风险不是写不出来，而是**正确性长尾**：`vim` / `htop` / `tmux` / `man`
+终端实现的风险不是写不出来，而是**正确性长尾**：`vim` / `htop` / `tmux` / `man`
 会把每一个 escape 序列的 bug 都翻出来，而本项目没有真机自动化测试。
 靠肉眼比对无法收敛。
 
@@ -156,6 +165,8 @@ tools/              generate-corpus.py / capture-corpus.sh / fetch-oracle.sh
 ```
 
 ## 加入自研实现
+
+自研目前不做；这一节是给「哪天重新考虑自研」或「想拿另一份实现来对照」时用的。
 
 在 `Harness.implementations()` 里注册即可，测试台其余部分无需改动。
 第一个条目是基线，其余与之逐片比较。

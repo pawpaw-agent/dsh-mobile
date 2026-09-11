@@ -17,8 +17,9 @@ import java.util.concurrent.CopyOnWriteArrayList
  *   调用方拿到的都是同一条隧道（此前 MainActivity 与后台通知服务各建一条 =
  *   两个 dbclient / 两个本地端口）。关闭只有 [closeTunnel]（用户手动断开）
  *   或进程结束。
- * - SshTunnel.binPath：dbclient 可执行文件（nativeLibraryDir/libdbclient.so），
- *   SshTunnel 自身无 Context，由这里注入（方案 B：进程式隧道与终端共用）。
+ * - SshTunnel.binPath / SshTunnel.homeDir：dbclient 可执行文件与它的 HOME
+ *   （nativeLibraryDir/libdbclient.so、filesDir），SshTunnel 自身无 Context，
+ *   由这里注入（方案 B：进程式隧道与终端共用）。
  *
  * 后台行为：**没有前台服务**（原本的 agent 完成通知已在 1.11.0 移除，改由服务端
  * 经微信推送）。退到后台后进程降为 cached，可能被系统回收 → 回到 App 会冷启动
@@ -60,6 +61,9 @@ class DshApp : Application() {
         super.onCreate()
         SshTunnel.binPath = File(applicationInfo.nativeLibraryDir, "libdbclient.so")
             .takeIf { it.exists() }?.absolutePath
+        // HOME 用 filesDir，与终端模式（TuiActivity）一致：两边写同一份 known_hosts，
+        // TOFU 信任才不会分裂成两份。见 SshTunnel.homeDir。
+        SshTunnel.homeDir = filesDir.absolutePath
     }
 
     // ── 隧道所有权 ────────────────────────────────────────────────

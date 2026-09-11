@@ -69,9 +69,8 @@ class MainActivity : Activity() {
     private val tunnelObserver = object : DshApp.TunnelObserver {
         override fun onTunnelBaseChanged(base: String) {
             runOnUiThread {
-                lastUrl = base
-                prefs.edit().putString("url", base).apply()
-                // 本地基址变了 → cookie 失效，必须重新走 token 交换
+                // 只置 ack：lastUrl 与 prefs["url"] 由 connectWeb 自己写，这里再写一遍是重复赋值。
+                // 本地基址变了 → cookie 失效，必须重新走 token 交换。
                 sshTokenAck = false
                 connectWeb(base)
             }
@@ -110,17 +109,18 @@ class MainActivity : Activity() {
     private lateinit var prefs: android.content.SharedPreferences
 
     private companion object {
-        // 黑白色调
         const val TAG = "DshHandheld"
-        const val COL_BG = 0xFF0A0A0E.toInt()
-        const val COL_TEXT = 0xFFF5F5F7.toInt()
-        const val COL_TITLE = 0xFFF5F5F7.toInt()
-        const val COL_MUTED = 0x99FFFFFF.toInt()
-        const val COL_DIM = 0x55FFFFFF.toInt()
-        const val COL_HINT = 0x66FFFFFF.toInt()
-        const val COL_ACCENT = 0xFFF5F5F7.toInt()
-        const val COL_ACCENT_TEXT = 0xFF0A0A0E.toInt()
-        const val COL_ERROR = 0xFFFF6B6B.toInt()
+        // 配色与尺寸基元集中在 UiKit（此前 MainActivity / TuiActivity 各定义一份）。
+        // 保留这些别名是为了让 60 余处调用点不必改动；定义只有一处。
+        const val COL_BG = UiKit.BG
+        const val COL_TEXT = UiKit.TEXT
+        const val COL_TITLE = UiKit.TITLE
+        const val COL_MUTED = UiKit.MUTED
+        const val COL_DIM = UiKit.DIM
+        const val COL_HINT = UiKit.HINT
+        const val COL_ACCENT = UiKit.ACCENT
+        const val COL_ACCENT_TEXT = UiKit.ACCENT_TEXT
+        const val COL_ERROR = UiKit.ERROR
         const val UA_MARKER = "DshHandheld/1.0"
         const val DEFAULT_PORT = "3080"
         const val REQ_PICK_KEY = 2001
@@ -233,7 +233,7 @@ class MainActivity : Activity() {
                     if (u?.startsWith("http") == true && !u.contains("?token=")) {
                         sshTokenAck = true
                         Log.i(TAG, "onPageFinished: 正式页面加载完成 → ack=true url=$u")
-                        guideLineDone(3, "③ 打开 dsh 网页 ✓ 已打开")
+                        guideLine(3, "③ 打开 dsh 网页 ✓ 已打开", state = false)
                     } else if (u != null) {
                         // about:blank / 带 token 的中间页：刻意不置 ack（1.5.2 的 401 回归源于此）
                         Log.i(TAG, "onPageFinished: 非正式页面，不置 ack url=$u")
@@ -328,11 +328,14 @@ class MainActivity : Activity() {
                 Log.i(TAG, "onCreate: 分支3 停留连接屏（有 url 但 ssh 配置不可用）")
                 connectView?.visibility = View.VISIBLE
             }
-        } else if (!currentUrl.isNullOrBlank()) {
+        } else if (currentUrl?.startsWith("http") == true) {
+            // 必须是**正式页面**才算「已在网页上」。此前判的是 `!isNullOrBlank()`，
+            // 于是「断开连接」载入的 about:blank 也命中这一支 → 连接屏被 GONE 掉、
+            // WebView 又是空白，重开 App 就是一条无 UI 出口的死路（BACK 只 moveTaskToBack）。
             Log.i(TAG, "onCreate: 分支1 直接回网页（复用保活 WebView，不重连不重载）")
             connectView?.visibility = View.GONE
         } else {
-            Log.i(TAG, "onCreate: 分支3 停留连接屏（无保存 url 且 WebView 为空）")
+            Log.i(TAG, "onCreate: 分支3 停留连接屏（无保存 url 且 WebView 非正式页面：$currentUrl）")
         }
     }
 
@@ -407,12 +410,9 @@ class MainActivity : Activity() {
         }
         outer.addView(card)
 
-        fun label(text: String): TextView = TextView(this).apply {
-            this.text = text
-            textSize = 11f
-            setTextColor(COL_DIM)
-            letterSpacing = 0.12f
-        }
+        // 三种文本角色（原先是三个几乎同构的局部工厂，只有字号/字色/粗体/字距不同）
+        fun label(text: String): TextView =
+            UiKit.text(this@MainActivity, text, 11f, COL_DIM, letterSpacing = 0.12f)
 
         fun input(hint: String, prefill: String = "", pwd: Boolean = false, number: Boolean = false): EditText =
             EditText(this@MainActivity).apply {
@@ -456,27 +456,21 @@ class MainActivity : Activity() {
                 }
             }
 
-        fun rowParams(top: Int = 0, width: Int = ViewGroup.LayoutParams.WRAP_CONTENT,
-                      height: Int = ViewGroup.LayoutParams.WRAP_CONTENT) =
-            LinearLayout.LayoutParams(width, height).apply { topMargin = top }
-
-        /** 密码行：输入框 + 显示/隐藏切换（避免密码框永远黑点）。 */
+        /**
+         * 密码行：输入框 + 显示/隐藏切换（避免密码框永远黑点）。
+         */
         fun pwdRow(field: EditText): View {
-            val showBtn = Button(this@MainActivity).apply {
-                text = "显示"
-                isAllCaps = false
-                textSize = 12f
-                setTextColor(COL_DIM)
-                setBackgroundResource(R.drawable.bg_button_secondary)
-                setOnClickListener {
-                    val wasMasked = field.transformationMethod != null
-                    field.transformationMethod = if (wasMasked) null
-                        else android.text.method.PasswordTransformationMethod.getInstance()
-                    field.text?.let { field.setSelection(it.length) }
-                    // 刚揭开（现在可见）→ 按钮变「隐藏」；刚遮上 → 变「显示」
-                    this.text = if (wasMasked) "隐藏" else "显示"
-                    setTextColor(if (wasMasked) COL_ACCENT else COL_DIM)
-                }
+            // 按钮要在自己的点击回调里改自己的文案，所以先建后挂监听。
+            val showBtn = UiKit.button(this@MainActivity, "显示", UiKit.Style.SECONDARY, textSize = 12f) {}
+            showBtn.setTextColor(COL_DIM)
+            showBtn.setOnClickListener {
+                val wasMasked = field.transformationMethod != null
+                field.transformationMethod = if (wasMasked) null
+                    else android.text.method.PasswordTransformationMethod.getInstance()
+                field.text?.let { field.setSelection(it.length) }
+                // 刚揭开（现在可见）→ 按钮变「隐藏」；刚遮上 → 变「显示」
+                showBtn.text = if (wasMasked) "隐藏" else "显示"
+                showBtn.setTextColor(if (wasMasked) COL_ACCENT else COL_DIM)
             }
             return LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -525,17 +519,11 @@ class MainActivity : Activity() {
         }
 
         // 步骤容器（后续在 card 内按顺序 addView）
-        fun stepLabel(text: String): TextView = TextView(this@MainActivity).apply {
-            this.text = text
-            textSize = 13f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(COL_TITLE)
-        }
-        fun stepHint(text: String): TextView = TextView(this@MainActivity).apply {
-            this.text = text
-            textSize = 11f
-            setTextColor(COL_MUTED)
-        }
+        fun stepLabel(text: String): TextView =
+            UiKit.text(this@MainActivity, text, 13f, COL_TITLE, bold = true)
+
+        fun stepHint(text: String): TextView =
+            UiKit.text(this@MainActivity, text, 11f, COL_MUTED)
 
         // ── Step 1：你想做什么 ─────────────────────────────────────────
         step1Card = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
@@ -598,12 +586,8 @@ class MainActivity : Activity() {
         // 小字：避免选择负担
         step1Card!!.addView(stepHint("· 看 dsh 网页：管理和浏览电脑上的 dsh 界面\n· 打开终端：远程敲命令，像在电脑前一样"),
             rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        step1Card!!.addView(Button(this@MainActivity).apply {
-            text = "下一步"
-            isAllCaps = false
-            setTextColor(COL_ACCENT_TEXT)
-            setBackgroundResource(R.drawable.bg_button_primary)
-            setOnClickListener { step2Card?.visibility = View.VISIBLE; step1Card?.visibility = View.GONE }
+        step1Card!!.addView(UiKit.button(this@MainActivity, "下一步", UiKit.Style.PRIMARY) {
+            step2Card?.visibility = View.VISIBLE; step1Card?.visibility = View.GONE
         }, rowParams(top = dp(12), height = dp(46), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         // ── Step 2：连接信息 ───────────────────────────────────────────
@@ -653,13 +637,8 @@ class MainActivity : Activity() {
         val keyPathInput = input("点「导入」选文件，或直接填路径", savedSsh?.optString("keyPath") ?: "")
         keyPathInput.isFocusable = true
         sshKeyPathInput = keyPathInput
-        val browseKeyBtn = Button(this@MainActivity).apply {
-            text = "导入"
-            isAllCaps = false
-            textSize = 12f
-            setTextColor(COL_TEXT)
-            setBackgroundResource(R.drawable.bg_button_secondary)
-            setOnClickListener { pickSshKey() }
+        val browseKeyBtn = UiKit.button(this@MainActivity, "导入", UiKit.Style.SECONDARY, textSize = 12f) {
+            pickSshKey()
         }
         val keyPathRow = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -705,72 +684,52 @@ class MainActivity : Activity() {
 
         // Step 2 底部：上一步 + 主按钮（文案跟模式）
         val step2Nav = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
-        step2Nav.addView(Button(this@MainActivity).apply {
-            text = "上一步"
-            isAllCaps = false
-            textSize = 12f
-            setTextColor(COL_TEXT)
-            setBackgroundResource(R.drawable.bg_button_secondary)
-            setOnClickListener { step1Card?.visibility = View.VISIBLE; step2Card?.visibility = View.GONE }
+        step2Nav.addView(UiKit.button(this@MainActivity, "上一步", UiKit.Style.SECONDARY, textSize = 12f) {
+            step1Card?.visibility = View.VISIBLE; step2Card?.visibility = View.GONE
         }, LinearLayout.LayoutParams(dp(88), dp(46)).apply { marginEnd = dp(6) })
-        connectMainBtn = Button(this@MainActivity).apply {
-            isAllCaps = false
-            text = if (webMode) "连上并打开 dsh 网页" else "连上并打开终端"
-            setTextColor(COL_ACCENT_TEXT)
-            setBackgroundResource(R.drawable.bg_button_primary)
-            setOnClickListener {
-                sshTokenAck = false
+        connectMainBtn = UiKit.button(
+            this@MainActivity,
+            if (webMode) "连上并打开 dsh 网页" else "连上并打开终端",
+            UiKit.Style.PRIMARY
+        ) {
+            sshTokenAck = false
 
-                // 校验
-                val sh = sshHostInput.text.toString().trim()
-                val su = sshUserInput.text.toString().trim()
-                val sport = sshPortInput.text.toString().trim().toIntOrNull()?.coerceIn(1, 65535) ?: 22
-                val target = sshTargetPortInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
-                    .toIntOrNull()?.coerceIn(1, 65535) ?: 3080
-                if (sh.isBlank() || su.isBlank()) { status("请填写电脑地址和登录账号", true); guideBackToStep2(); return@setOnClickListener }
-                val auth = if (authKeyBtn.isChecked) {
-                    val path = keyPathInput.text.toString().trim()
-                    if (path.isBlank()) { status("请填写私钥路径，或点「导入」选文件", true); guideBackToStep2(); return@setOnClickListener }
-                    val keyFile = File(path)
-                    if (!keyFile.exists()) { status("私钥文件不存在：$path", true); guideBackToStep2(); return@setOnClickListener }
-                    SshTunnel.Auth.KeyPair(keyFile, keyPassInput.text.toString().ifEmpty { null })
-                } else {
-                    if (sshPassInput.text.toString().isEmpty()) { status("请填写电脑登录密码", true); guideBackToStep2(); return@setOnClickListener }
-                    SshTunnel.Auth.Password(sshPassInput.text.toString())
-                }
-                if (!webMode) {
-                    persistSshConfig(sh, sport, su, target, auth)
-                    startActivity(Intent(this@MainActivity, TuiActivity::class.java))
-                    return@setOnClickListener
-                }
-                if (!beginConnect()) { guideBackToStep2(); return@setOnClickListener }
-                guideLine(1, "① 检查电脑 正在连接…", running = true)
-                connectViaSsh(sh, sport, su, target, auth)
+            // 校验
+            val sh = sshHostInput.text.toString().trim()
+            val su = sshUserInput.text.toString().trim()
+            val sport = sshPortInput.text.toString().trim().toIntOrNull()?.coerceIn(1, 65535) ?: 22
+            val target = sshTargetPortInput.text.toString().trim().ifEmpty { DEFAULT_PORT }
+                .toIntOrNull()?.coerceIn(1, 65535) ?: 3080
+            if (sh.isBlank() || su.isBlank()) { status("请填写电脑地址和登录账号", true); guideBackToStep2(); return@button }
+            val auth = if (authKeyBtn.isChecked) {
+                val path = keyPathInput.text.toString().trim()
+                if (path.isBlank()) { status("请填写私钥路径，或点「导入」选文件", true); guideBackToStep2(); return@button }
+                val keyFile = File(path)
+                if (!keyFile.exists()) { status("私钥文件不存在：$path", true); guideBackToStep2(); return@button }
+                SshTunnel.Auth.KeyPair(keyFile, keyPassInput.text.toString().ifEmpty { null })
+            } else {
+                if (sshPassInput.text.toString().isEmpty()) { status("请填写电脑登录密码", true); guideBackToStep2(); return@button }
+                SshTunnel.Auth.Password(sshPassInput.text.toString())
             }
+            if (!webMode) {
+                persistSshConfig(sh, sport, su, target, auth)
+                startActivity(Intent(this@MainActivity, TuiActivity::class.java))
+                return@button
+            }
+            if (!beginConnect()) { guideBackToStep2(); return@button }
+            guideLine(1, "① 检查电脑 正在连接…", state = true)
+            connectViaSsh(sh, sport, su, target, auth)
         }
         step2Nav.addView(connectMainBtn!!, LinearLayout.LayoutParams(0, dp(46), 1f))
         step2Card!!.addView(step2Nav, rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         // ── Step 3：连接中 ─────────────────────────────────────────────
         // 行内容由类级 guideLine* 更新（connectViaSsh/autoConnectSsh/onPageFinished 共用）
-        val line1 = TextView(this@MainActivity).apply {
-            textSize = 13f
-            text = "① 检查电脑 等待连接…"
-            setTextColor(COL_MUTED)
-            setIncludeFontPadding(false)
-        }
-        val line2 = TextView(this@MainActivity).apply {
-            textSize = 13f
-            text = "② 建立安全通道"
-            setTextColor(COL_MUTED)
-            setIncludeFontPadding(false)
-        }
-        val line3 = TextView(this@MainActivity).apply {
-            textSize = 13f
-            text = "③ 打开 dsh 网页"
-            setTextColor(COL_MUTED)
-            setIncludeFontPadding(false)
-        }
+        fun guideRow(text: String): TextView =
+            UiKit.text(this@MainActivity, text, 13f, COL_MUTED).apply { setIncludeFontPadding(false) }
+        val line1 = guideRow("① 检查电脑 等待连接…")
+        val line2 = guideRow("② 建立安全通道")
+        val line3 = guideRow("③ 打开 dsh 网页")
         stepGuideLine1 = line1
         stepGuideLine2 = line2
         stepGuideLine3 = line3
@@ -780,13 +739,8 @@ class MainActivity : Activity() {
         step3Card!!.addView(line1, rowParams(top = dp(12), width = ViewGroup.LayoutParams.MATCH_PARENT))
         step3Card!!.addView(line2, rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
         step3Card!!.addView(line3, rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
-        step3Card!!.addView(Button(this@MainActivity).apply {
-            text = "返回修改"
-            isAllCaps = false
-            textSize = 12f
-            setTextColor(COL_TEXT)
-            setBackgroundResource(R.drawable.bg_button_secondary)
-            setOnClickListener { guideBackToStep2() }
+        step3Card!!.addView(UiKit.button(this@MainActivity, "返回修改", UiKit.Style.SECONDARY, textSize = 12f) {
+            guideBackToStep2()
         }, rowParams(top = dp(14), width = ViewGroup.LayoutParams.MATCH_PARENT))
         stepGuideCard = step3Card
         stepGuideStep2 = step2Card
@@ -812,25 +766,18 @@ class MainActivity : Activity() {
 
         // 回到网页（隧道还活着、WebView 里还有页面时才显示）：
         // 从网页按返回后再点一下就能回去，不必重建隧道（重建会换本地端口）
-        backToWebButton = Button(this@MainActivity).apply {
-            text = "回到网页"
-            isAllCaps = false
-            textSize = 12f
-            setTextColor(COL_ACCENT_TEXT)
-            setBackgroundResource(R.drawable.bg_button_primary)
-            setOnClickListener {
-                if (webView?.url?.startsWith("http") == true) {
-                    connectView?.visibility = View.GONE
+        backToWebButton = UiKit.button(this@MainActivity, "回到网页", UiKit.Style.PRIMARY, textSize = 12f) {
+            if (webView?.url?.startsWith("http") == true) {
+                connectView?.visibility = View.GONE
+            } else {
+                // WebView 已空（如断开后）→ 有隧道就重新加载，没有则提示重连
+                val url = lastUrl
+                val tunneled = (application as DshApp).sshTunnel != null
+                if (tunneled && !url.isNullOrBlank()) {
+                    sshTokenAck = false
+                    connectWeb(url)
                 } else {
-                    // WebView 已空（如断开后）→ 有隧道就重新加载，没有则提示重连
-                    val url = lastUrl
-                    val tunneled = (application as DshApp).sshTunnel != null
-                    if (tunneled && !url.isNullOrBlank()) {
-                        sshTokenAck = false
-                        connectWeb(url)
-                    } else {
-                        status("网页已关闭，请重新连接", true)
-                    }
+                    status("网页已关闭，请重新连接", true)
                 }
             }
         }
@@ -838,13 +785,8 @@ class MainActivity : Activity() {
         backToWebButton!!.visibility = View.GONE
 
         // 断开连接（仅隧道运行时显示）
-        disconnectButton = Button(this@MainActivity).apply {
-            text = "断开连接"
-            isAllCaps = false
-            textSize = 12f
-            setTextColor(COL_ERROR)
-            setBackgroundResource(R.drawable.bg_button_secondary)
-            setOnClickListener { disconnectCurrent() }
+        disconnectButton = UiKit.button(this@MainActivity, "断开连接", UiKit.Style.ERROR, textSize = 12f) {
+            disconnectCurrent()
         }
         card.addView(disconnectButton!!, rowParams(top = dp(10), height = dp(36), width = ViewGroup.LayoutParams.MATCH_PARENT))
         disconnectButton!!.visibility = View.GONE
@@ -852,15 +794,12 @@ class MainActivity : Activity() {
 
         // 上次连接摘要（单行，非空时显示）
         savedSsh?.takeIf { it.optString("sshHost").isNotBlank() }?.let {
-            card.addView(TextView(this@MainActivity).apply {
-                text = "上次连接: ${it.optString("sshUser")}@${it.optString("sshHost")}:${it.optInt("sshPort", 22)}" +
-                    " → ${it.optString("remoteHost", "127.0.0.1")}:${it.optInt("remotePort", 3080)}"
-                textSize = 10f
-                setTextColor(COL_DIM)
-                gravity = Gravity.CENTER
-                maxLines = 1
-                setHorizontallyScrolling(true)
-            }, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
+            card.addView(UiKit.singleLineText(
+                this@MainActivity,
+                "上次连接: ${it.optString("sshUser")}@${it.optString("sshHost")}:${it.optInt("sshPort", 22)}" +
+                    " → ${it.optString("remoteHost", "127.0.0.1")}:${it.optInt("remotePort", 3080)}",
+                10f, COL_DIM, Gravity.CENTER
+            ), rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
         }
 
         return scroll
@@ -1003,8 +942,8 @@ class MainActivity : Activity() {
                     status("隧道建立失败（检查 SSH 主机/端口/用户/认证）")
                     // 提示词跟登录方式：私钥用户看到「检查密码」会懵
                     val what = if (auth is SshTunnel.Auth.KeyPair) "私钥" else "密码"
-                    guideLineFail(1, "① 检查电脑 ✗ 连不上你的电脑（检查地址/账号/$what）")
-                    guideLine(2, "② 建立安全通道 未开始", running = true)
+                    guideLine(1, "① 检查电脑 ✗ 连不上你的电脑（检查地址/账号/$what）", state = null)
+                    guideLine(2, "② 建立安全通道 未开始", state = true)
                     // ensureTunnel 已把旧隧道关掉，这里必须刷新，否则
                     // 「回到网页 / 断开连接」会留在屏幕上指向一个已死的隧道
                     refreshConnectState()
@@ -1012,13 +951,13 @@ class MainActivity : Activity() {
                 }
                 return@Thread
             }
-            runOnUiThread { guideLineDone(1, "① 检查电脑 ✓ 已连上电脑") }
+            runOnUiThread { guideLine(1, "① 检查电脑 ✓ 已连上电脑", state = false) }
             // 自动获取最新 token（服务重启后旧 token 失效；失败静默回退）
             val token = autoFetchToken(tunnel)
             runOnUiThread {
                 Log.i(TAG, "connectViaSsh: token=${if (token != null) "已获取" else "未获取（仍尝试打开）"}")
-                if (token != null) guideLineDone(2, "② 建立安全通道 ✓ 已连通")
-                else guideLineFail(2, "② 建立安全通道 ⚠ 未获取令牌，仍尝试打开")
+                if (token != null) guideLine(2, "② 建立安全通道 ✓ 已连通", state = false)
+                else guideLine(2, "② 建立安全通道 ⚠ 未获取令牌，仍尝试打开", state = null)
                 persistSshConfig(sshHost, sshPort, sshUser, remotePort, auth)
                 sshTokenAck = false
                 connectWeb(base)
@@ -1097,48 +1036,65 @@ class MainActivity : Activity() {
             .show()
     }
 
-    // ── 错误页 ────────────────────────────────────────────────
-    private fun showErrorPage(message: String) {
-        if (errorView == null) {
-            errorView = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setBackgroundColor(COL_BG)
-                gravity = Gravity.CENTER
-                layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-                )
-                addView(TextView(this@MainActivity).apply {
-                    text = "连接失败"
-                    textSize = 22f
-                    setTextColor(COL_TEXT)
-                    gravity = Gravity.CENTER
-                })
-                addView(TextView(this@MainActivity).apply {
-                    text = "检查地址、端口和网络后重试"
-                    textSize = 14f
-                    setTextColor(COL_MUTED)
-                    gravity = Gravity.CENTER
-                }, rowParams(top = dp(8)))
-                addView(Button(this@MainActivity).apply {
-                    text = "重试"
-                    isAllCaps = false
-                    setTextColor(COL_ACCENT_TEXT)
-                    setBackgroundResource(R.drawable.bg_button_primary)
-                    setOnClickListener { hideErrorPage(); lastUrl?.let { sshTokenAck = false; connectWeb(it) } }
-                }, rowParams(top = dp(24), height = dp(48), width = dp(200)))
-                addView(Button(this@MainActivity).apply {
-                    text = "换服务器"
-                    isAllCaps = false
-                    setTextColor(COL_TEXT)
-                    setBackgroundResource(R.drawable.bg_button_secondary)
-                    setOnClickListener { hideErrorPage(); showConnectScreen() }
-                }, rowParams(top = dp(12), height = dp(48), width = dp(200)))
-            }
-            (webView?.parent as? ViewGroup)?.addView(errorView)
+    // ── 整屏提示页（错误页 / 401 令牌页）────────────────────────
+    /** 提示页上的一个按钮。 */
+    private class OverlayAction(
+        val text: String,
+        val primary: Boolean,
+        val onClick: () -> Unit
+    )
+
+    /**
+     * 在 WebView 上覆盖一屏提示（标题 / 副标题 / 若干按钮）。
+     *
+     * 两个页面共用同一个容器 [errorView]，但**每次显示都重写全部文本与按钮**。
+     * 早前的实现是「谁先构造谁定文案」：401 令牌页从不写副标题，于是先出网络错误、
+     * 后出 401 时，页面会顶着「需要访问令牌」的标题配一条过期的 `HTTP xxx`；反向同理。
+     * 按钮改为每次重建，两页各自的按钮文案/动作不同也不再互相污染。
+     */
+    private fun showOverlay(title: String, subtitle: String, actions: List<OverlayAction>) {
+        val box = errorView as? LinearLayout ?: LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(COL_BG)
+            gravity = Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            addView(UiKit.text(this@MainActivity, "", 22f, COL_TEXT).apply { gravity = Gravity.CENTER })
+            addView(
+                UiKit.text(this@MainActivity, "", 14f, COL_MUTED).apply { gravity = Gravity.CENTER },
+                rowParams(top = dp(8))
+            )
+            errorView = this
+            (webView?.parent as? ViewGroup)?.addView(this)
         }
-        val msgView = (errorView as? LinearLayout)?.getChildAt(1) as? TextView
-        msgView?.text = message
-        errorView?.visibility = View.VISIBLE
+        (box.getChildAt(0) as? TextView)?.text = title
+        (box.getChildAt(1) as? TextView)?.text = subtitle
+        while (box.childCount > 2) box.removeViewAt(2)
+        actions.forEachIndexed { index, action ->
+            box.addView(
+                UiKit.button(
+                    this,
+                    action.text,
+                    if (action.primary) UiKit.Style.PRIMARY else UiKit.Style.SECONDARY,
+                    onClick = action.onClick
+                ),
+                rowParams(top = dp(if (index == 0) 24 else 12), height = dp(48), width = dp(200))
+            )
+        }
+        box.visibility = View.VISIBLE
+    }
+
+    private fun showErrorPage(message: String) {
+        showOverlay(
+            "连接失败", message,
+            listOf(
+                OverlayAction("重试", true) {
+                    hideErrorPage(); lastUrl?.let { sshTokenAck = false; connectWeb(it) }
+                },
+                OverlayAction("换服务器", false) { hideErrorPage(); showConnectScreen() }
+            )
+        )
     }
 
     private fun hideErrorPage() { errorView?.visibility = View.GONE }
@@ -1169,47 +1125,19 @@ class MainActivity : Activity() {
      * 令牌由应用自动从服务端日志获取——提供「自动获取并重连」一键处理。
      */
     private fun showTokenPromptPage() {
-        if (errorView == null) {
-            errorView = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setBackgroundColor(COL_BG)
-                gravity = Gravity.CENTER
-                layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-                )
-                addView(TextView(this@MainActivity).apply {
-                    text = "需要访问令牌"
-                    textSize = 22f
-                    setTextColor(COL_TEXT)
-                    gravity = Gravity.CENTER
-                })
-                addView(TextView(this@MainActivity).apply {
-                    text = "dsh 0.1.2+ 需要一次性启动令牌（服务重启后旧令牌失效）。\n应用会自动从服务端日志重新获取；\n若仍失败，请检查服务端 dsh-web.service 是否在运行。"
-                    textSize = 14f
-                    setTextColor(COL_MUTED)
-                    gravity = Gravity.CENTER
-                }, rowParams(top = dp(8)))
-                addView(Button(this@MainActivity).apply {
-                    text = "自动获取令牌并重连"
-                    isAllCaps = false
-                    setTextColor(COL_ACCENT_TEXT)
-                    setBackgroundResource(R.drawable.bg_button_primary)
-                    setOnClickListener { reFetchTokenAndReload() }
-                }, rowParams(top = dp(24), height = dp(48), width = dp(200)))
-                addView(Button(this@MainActivity).apply {
-                    text = "重试"
-                    isAllCaps = false
-                    setTextColor(COL_TEXT)
-                    setBackgroundResource(R.drawable.bg_button_secondary)
-                    setOnClickListener {
-                        hideErrorPage()
-                        lastUrl?.let { sshTokenAck = false; connectWeb(it) }
-                    }
-                }, rowParams(top = dp(12), height = dp(48), width = dp(200)))
-            }
-            (webView?.parent as? ViewGroup)?.addView(errorView)
-        }
-        errorView?.visibility = View.VISIBLE
+        showOverlay(
+            "需要访问令牌",
+            "dsh 0.1.2+ 需要一次性启动令牌（服务重启后旧令牌失效）。\n" +
+                "应用会自动从服务端日志重新获取；\n" +
+                "若仍失败，请检查服务端 dsh-web.service 是否在运行。",
+            listOf(
+                OverlayAction("自动获取令牌并重连", true) { reFetchTokenAndReload() },
+                OverlayAction("重试", false) {
+                    hideErrorPage()
+                    lastUrl?.let { sshTokenAck = false; connectWeb(it) }
+                }
+            )
+        )
     }
 
     /** 401 令牌页：用当前隧道重新自动获取令牌并重载（失败则回到提示页）。 */
@@ -1225,7 +1153,9 @@ class MainActivity : Activity() {
         Thread {
             val token = autoFetchToken(tunnel)
             runOnUiThread {
-                if (token == null || token.length < 40) {
+                // autoFetchToken 只在拿到 ≥40 字符的 token 时返回非 null，所以这里
+                // 只需判空（原先还重判了一次 length < 40，那半段不可达）。
+                if (token == null) {
                     status("自动获取令牌失败，请检查服务端 dsh-web.service", true)
                     showTokenPromptPage()
                 } else {
@@ -1329,9 +1259,9 @@ class MainActivity : Activity() {
     private fun guideStep3Show() {
         stepGuideCard?.visibility = View.VISIBLE
         stepGuideStep2?.visibility = View.GONE
-        guideLine(1, "① 检查电脑 正在连接…", running = true)
-        guideLine(2, "② 建立安全通道", running = true)
-        guideLine(3, "③ 打开 dsh 网页", running = true)
+        guideLine(1, "① 检查电脑 正在连接…", state = true)
+        guideLine(2, "② 建立安全通道", state = true)
+        guideLine(3, "③ 打开 dsh 网页", state = true)
     }
     /** 引导行统一按 ①②③ 编号（1 起）；此前映射是 0 基、调用方传 1 基，
      *  导致「① 检查电脑」被写进第二行、② 行永远不更新。 */
@@ -1340,20 +1270,24 @@ class MainActivity : Activity() {
         2 -> stepGuideLine2
         else -> stepGuideLine3
     }
-    private fun guideLine(index: Int, text: String, running: Boolean = false) {
+
+    /**
+     * 写引导行。
+     *
+     * @param state `true` = 进行中（灰），`false` = 完成（亮），`null` = 失败（红）。
+     *   三态用可空布尔表达，好过原来三个只差一个颜色的函数（`guideLineDone` 与
+     *   `guideLine` 的默认行为本来就完全一致）。
+     */
+    private fun guideLine(index: Int, text: String, state: Boolean? = true) {
         val v = guideLineView(index) ?: return
         v.text = text
-        v.setTextColor(if (running) COL_MUTED else COL_ACCENT)
-    }
-    private fun guideLineDone(index: Int, text: String) {
-        val v = guideLineView(index) ?: return
-        v.text = text
-        v.setTextColor(COL_ACCENT)
-    }
-    private fun guideLineFail(index: Int, text: String) {
-        val v = guideLineView(index) ?: return
-        v.text = text
-        v.setTextColor(COL_ERROR)
+        v.setTextColor(
+            when (state) {
+                true -> COL_MUTED
+                false -> COL_ACCENT
+                null -> COL_ERROR
+            }
+        )
     }
     private fun guideBackToStep2() {
         stepGuideStep2?.visibility = View.VISIBLE
@@ -1407,9 +1341,9 @@ class MainActivity : Activity() {
     }
 
     private fun resetGuideLines() {
-        guideLine(1, "① 检查电脑 等待连接…", running = true)
-        guideLine(2, "② 建立安全通道", running = true)
-        guideLine(3, "③ 打开 dsh 网页", running = true)
+        guideLine(1, "① 检查电脑 等待连接…", state = true)
+        guideLine(2, "② 建立安全通道", state = true)
+        guideLine(3, "③ 打开 dsh 网页", state = true)
     }
 
     /** 失败自动重试：5s 后重载（若隧道仍活；watchdog 会重建死隧道）。每次 connectWeb 重置 3 次余量。 */
@@ -1426,8 +1360,11 @@ class MainActivity : Activity() {
     }
 
     private fun spacer(h: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, h) }
+
+    /** 纵向排列最常用的 LayoutParams；定义在 UiKit（此前本文件里有两份逐字相同的副本）。 */
     private fun rowParams(top: Int = 0, width: Int = ViewGroup.LayoutParams.WRAP_CONTENT,
                           height: Int = ViewGroup.LayoutParams.WRAP_CONTENT) =
-        LinearLayout.LayoutParams(width, height).apply { topMargin = top }
-    private fun dp(n: Int) = (n * resources.displayMetrics.density + 0.5f).toInt()
+        UiKit.rowParams(top, width, height)
+
+    private fun dp(n: Int) = UiKit.dp(this, n)
 }

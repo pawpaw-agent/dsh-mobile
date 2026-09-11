@@ -52,10 +52,11 @@ class TuiActivity : Activity() {
 
     private companion object {
         const val TAG = "TuiActivity"
-        const val COL_BG = 0xFF0A0A0E.toInt()
-        const val COL_TEXT = 0xFFF5F5F7.toInt()
-        const val COL_TEXT_ACTIVE = 0xFF80DEEA.toInt()
-        const val COL_MUTED = 0x99FFFFFF.toInt()
+        // 配色与连接屏共用一份定义（见 UiKit）；此前两个 Activity 各写一遍。
+        const val COL_BG = UiKit.BG
+        const val COL_TEXT = UiKit.TEXT
+        const val COL_TEXT_ACTIVE = UiKit.TEXT_ACTIVE
+        const val COL_MUTED = UiKit.MUTED
         const val KEY_NAME = "id_dropbear"
 
         /**

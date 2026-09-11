@@ -30,8 +30,8 @@ adb shell run-as com.dshhandheld.app cat shared_prefs/dsh-handheld.xml
 
 ## 其他变更
 
-- **依赖升级**：`webkit` 1.9.0 → **1.15.0**，`core-ktx` 1.12.0 → **1.13.1**。
-  上限受两个独立约束（AAR 的 `minCompileSdk` 与传递依赖的 `kotlin-stdlib` metadata 版本）——`webkit` 从 1.16.0 起引入 `kotlin-stdlib:2.1.20`，在 Kotlin 1.9.22 下无法编译，故停在 1.15.0。
+- **依赖升级**：`webkit` 1.9.0 → **1.15.0**，`core-ktx` 1.12.0 → **1.13.1**（为什么只能升到
+  这里，见 [依赖升级上限](releasing.md)）。
 - **CI 加固**：改为构建 release 包，secrets 缺失时告警；新增硬校验——产物若含 `application-debuggable` 则**构建直接失败**。签名材料用后即删，不入库。
 - **修正 vendored Termux 文件的归属头**：6 个副本中有 2 个实为本地已修改（`ExtraKeyButton` 加 `rowSpan`、`ExtraKeysView` 改字号与跨行），原注释却写 “Vendored unmodified”。
 - README 增补「凭据存储」「版本与升级」「Termux vendoring」「发布与签名」四节。
@@ -51,13 +51,12 @@ adb shell run-as com.dshhandheld.app cat shared_prefs/dsh-handheld.xml
 
 ## 安装
 
-1. 下载下方 `dsh-handheld-0.1.3.apk`
-2. **若装过 0.1.2 或更早版本，先卸载**（签名不同）
-3. 在电脑上启动 `dsh --profile web`，打开 App，填电脑地址 / 登录账号 / 电脑登录密码
+下载 `dsh-handheld-0.1.3.apk`，按 [标准安装步骤](releasing.md) 操作。本版**签名变更**
+（改用独立 release 密钥），装过 0.1.2 或更早版本必须先卸载。
 
 ## 许可
 
-GPL-3.0。SSH 终端模式集成 Termux [terminal-view](https://github.com/termux/termux-app)（GPL-3.0），故整体以 GPL-3.0 发布。另打包 Dropbear `dbclient` 与第三方移动端适配插件 [dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile)（MIT），各自许可证随附。
+见 [标准许可说明](releasing.md)。
 
 ---
 

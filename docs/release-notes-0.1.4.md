@@ -27,13 +27,12 @@ rm -rf ~/.dsh/sessions/<projectKey>/session-<uuid>/     # 一个目录 = 一个�
 
 ## 安装
 
-1. 下载下方 `dsh-handheld-0.1.4.apk`
-2. 0.1.3 用户可直接覆盖安装
-3. 在电脑上启动 `dsh --profile web`，打开 App，填电脑地址 / 登录账号 / 电脑登录密码
+下载 `dsh-handheld-0.1.4.apk`，按 [标准安装步骤](releasing.md) 操作。本版签名与 0.1.3 相同，
+**可直接覆盖安装**。
 
 ## 许可
 
-GPL-3.0。SSH 终端模式集成 Termux [terminal-view](https://github.com/termux/termux-app)（GPL-3.0），故整体以 GPL-3.0 发布。另打包 Dropbear `dbclient` 与第三方移动端适配插件 [dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile)（MIT），各自许可证随附。
+见 [标准许可说明](releasing.md)。
 
 ---
 

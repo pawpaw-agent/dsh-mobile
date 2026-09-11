@@ -19,9 +19,8 @@
 
 ## 安装
 
-1. 从下方 Assets 下载 `dsh-handheld-0.1.2.apk`
-2. 在电脑上启动：`dsh --profile web`
-3. 打开 App，填写**电脑地址**（局域网 IP 或 Tailscale IP）、**登录账号**、**电脑登录密码**（隧道用）即可
+下载 `dsh-handheld-0.1.2.apk`，按 [标准安装步骤](releasing.md) 操作。本版是**全新安装**
+（`applicationId` 由 `com.dshmobile.app` 改为 `com.dshhandheld.app`），装过旧版需先卸载。
 
 ## 构建与验证状态
 
@@ -31,7 +30,7 @@
 
 ## 许可
 
-GPL-3.0。SSH 终端模式集成 Termux [terminal-view](https://github.com/termux/termux-app)（GPL-3.0），故整体以 GPL-3.0 发布。另打包 Dropbear `dbclient` 与第三方移动端适配插件 [dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile)（MIT），各自许可证随附。
+见 [标准许可说明](releasing.md)。
 
 ---
 

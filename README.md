@@ -105,30 +105,37 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 ```
 dsh-handheld/
 ├── android/
-│   └── app/src/main/
-│       ├── java/com/dshhandheld/
-│       │   ├── app/
-│       │   │   ├── MainActivity.kt           # 连接屏 + WebView 壳 + 隧道编排
-│       │   │   ├── TuiActivity.kt            # SSH 终端模式（PTY + Termux 渲染）
-│       │   │   ├── DshTerminalExtraKeys.kt   # 终端底部常驻键排
-│       │   │   ├── SecurePrefs.kt            # 凭据静态加密（AndroidKeyStore AES-GCM）
-│       │   │   └── DshApp.kt                 # Application：持有保活 WebView 与唯一隧道
-│       │   └── protocol/
-│       │       └── SshTunnel.kt              # dbclient 进程 + 端口选择 + 看门狗
-│       ├── assets/plugins/                   # 注入的移动端适配插件（MIT，见下）
-│       ├── jniLibs/arm64-v8a/                # dbclient（CI 阶段构建后放入）
-│       └── AndroidManifest.xml
+│   ├── app/src/main/
+│   │   ├── java/com/dshhandheld/
+│   │   │   ├── app/
+│   │   │   │   ├── MainActivity.kt           # 连接屏 + WebView 壳 + 隧道编排
+│   │   │   │   ├── TuiActivity.kt            # SSH 终端模式（PTY + Termux 渲染）
+│   │   │   │   ├── DshTerminalExtraKeys.kt   # 终端底部常驻键排
+│   │   │   │   ├── SecurePrefs.kt            # 凭据静态加密（AndroidKeyStore AES-GCM）
+│   │   │   │   └── DshApp.kt                 # Application：持有保活 WebView 与唯一隧道
+│   │   │   └── protocol/
+│   │   │       └── SshTunnel.kt              # dbclient 进程 + 端口选择 + 看门狗
+│   │   ├── java/com/termux/shared/terminal/io/   # vendored Termux 额外键栏（7 文件，见下）
+│   │   ├── assets/plugins/                   # 注入的移动端适配插件（MIT，见下）
+│   │   ├── jniLibs/arm64-v8a/                # dbclient（CI 阶段构建后放入）
+│   │   └── AndroidManifest.xml
+│   ├── terminal-conformance/                 # 纯 JVM 终端行为回归测试台（不进 APK）
+│   └── gradlew + gradle/ + *.gradle.kts      # 构建入口与 Gradle wrapper
 ├── scripts/
 │   ├── build-dropbear.sh                     # 交叉编译 dropbear dbclient
-│   ├── build-apk.sh
+│   ├── localoptions.h                        # dropbear 裁剪配置
 │   ├── push-via-api.py                       # 增量推送（git 传输不可用时）
 │   └── mirror-via-api.py                     # 整树镜像推送（重命名/删除时更稳）
 ├── docs/
 │   ├── known-issues.md                       # 已知问题与行为记录
-│   ├── dsh-protocol.md                       # DSH 线上协议逆向规格（历史存档）
-│   └── dsh-plugins-404-fix.md
-├── .github/workflows/ci.yml                  # 构建 dbclient → 构建并校验 release APK
-└── package.json
+│   ├── terminal-rewrite-plan.md              # 终端自研计划（已中止，只留结论）
+│   ├── releasing.md                          # 发布说明的公共部分（安装 / 许可 / 依赖上限）
+│   ├── release-notes-0.1.{2,3,4}.md          # 各版本发布说明
+│   ├── vendored-plugin-patches.md            # 对上游插件 bundle 的唯一补丁
+│   ├── dsh-plugins-404-fix.md
+│   └── archive/dsh-protocol.md               # 【存档】DSH 线上协议逆向规格（已无实现）
+├── .github/workflows/ci.yml                  # dbclient → 终端一致性门禁 → 构建并校验 release APK
+└── LICENSE
 ```
 
 ---
@@ -190,16 +197,34 @@ Kotlin`）。`core-ktx` 到 1.13.1 为止仍只依赖 `kotlin-stdlib:1.8.22`。
 
 ### Termux 组件的 vendoring
 
-`android/app/src/main/java/com/termux/shared/terminal/io/extrakeys/` 下的 6 个文件是从
-Termux `v0.118.1` 复制的副本，与 JitPack 依赖 `terminal-view` 内的同名类**同包同名**，
-编译时**源码优先于 jar**：
+`android/app/src/main/java/com/termux/shared/terminal/io/` 下的 **7 个文件**是从 Termux
+`v0.118.1` 复制的副本（`extrakeys/` 6 个 + `terminal/io/TerminalExtraKeys.java` 1 个）：
 
-- **4 个逐字未改**（仅加归属头）；
+- **5 个逐字未改**（仅加归属头）；
 - **2 个有本地改动**：`ExtraKeyButton`（新增 `rowSpan` 配置项）与 `ExtraKeysView`
   （字号与纵向跨行）。两文件的头注释已写明区别。
 
-**升级 `terminal-view` 时**：未 vendored 的类会随依赖更新，这 6 个副本**不会** ——
-上游在这几个类里的修复无法自动到达，需手工比对合并。
+**为什么必须 vendoring**：这些类**不在** JitPack 依赖 `terminal-view` 里。实测
+`terminal-view-0.118.1.aar` 的 `classes.jar` 只有 **19 个类**、全部位于 `com/termux/view/**`
+（含 `textselection`），其中**没有**任何 `com.termux.shared.terminal.io.*`——上游从未把这些类
+发布进 `terminal-view` 构件。所以这不是「源码覆盖 jar 里的同名类」，而是「只此一份」。
+
+> 本节此前写「6 个文件」「与 jar 同包同名、源码优先」，两条都与构件实测不符；现按解包
+> `classes.jar` 的结果更正（`docs/consolidation-audit.md` §4.1 的核对与实测一致）。
+> `extrakeys/` 下 6 个文件的归属头里也重复了「同包同名」这条错误说法，改 `.java` 时一并修正。
+
+**升级 `terminal-view` 时的真实风险**：这 7 个文件**冻结在 v0.118.1**，上游对它们的修复不会
+随依赖升级到达。反过来，「与 jar 里的版本手工合并」是空谈——没有 jar 版本可合并。
+
+#### vendored 代码的许可证
+
+7 个文件的归属头目前都写 `GPL-3.0`，这**不准确**。按 termux-app 自己的
+[`termux-shared/LICENSE.md`](https://github.com/termux/termux-app/blob/master/termux-shared/LICENSE.md)：
+该库整体是 **MIT**，GPLv3-only 只限于 `com/termux/shared/termux/*`——而这些文件在
+`com/termux/shared/terminal/io/` 下，不在该范围内。头注释应改为「MIT，源自 Termux」。
+
+> 本项目当前仍以 GPL-3.0 声明发布（见文末 License）。**是否重新判定项目自身的许可证是一个
+> 单独的、尚未做出的决定**；修正 vendored 头注释与它无关。
 
 ---
 
@@ -261,12 +286,15 @@ dsh 官方 Web 前端是桌面布局，窄屏下侧栏会常驻挤占内容。�
 
 **GPL-3.0**（[GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html)）
 
-SSH 终端模式集成了 Termux 的 [terminal-view / terminal-emulator](https://github.com/termux/termux-app)（GPL-3.0），因此整个项目以 GPL-3.0 发布；衍生作品需同样以 GPL-3.0 开源。
+本项目以 GPL-3.0 发布，衍生作品需同样以 GPL-3.0 开源。SSH 终端模式集成了 Termux 的
+[terminal-view / terminal-emulator](https://github.com/termux/termux-app)；这两个模块**自身**的
+许可在上游不是 GPL（见下），**是否据此重新判定本项目的许可证是一个单独的、尚未做出的决定**
+——相关事实与核对见上文「Termux 组件的 vendoring」。
 
 项目中还打包了第三方组件，各自的许可证随附于对应目录：
 
 | 组件 | 许可证 | 位置 |
 |---|---|---|
-| Termux terminal-view / terminal-emulator | GPL-3.0 | Gradle 依赖 |
+| Termux terminal-view / terminal-emulator | Apache-2.0（上游 `LICENSE.md` 对 ATE 代码的例外；vendored 的 `termux-shared` 部分为 MIT） | Gradle 依赖 + `java/com/termux/` |
 | Dropbear `dbclient` | MIT 风格（见随附文件） | `jniLibs/.../LICENSE-dropbear.txt` |
 | dsh-web-mobile 客户端插件 | MIT | `assets/plugins/LICENSE-dsh-web-mobile.txt` |

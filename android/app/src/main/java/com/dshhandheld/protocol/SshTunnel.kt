@@ -227,7 +227,9 @@ class SshTunnel(
     /** 与终端模式一致的认证 env（HOME 写 known_hosts；密码经 DROPBEAR_PASSWORD）。 */
     private fun baseEnv(): Map<String, String> {
         val m = mutableMapOf(
-            "HOME" to (System.getenv("HOME") ?: "/data/data/com.dshhandheld.app"),
+            // 必须与终端模式同一个 HOME（TuiActivity 用 filesDir），否则 TOFU 信任
+            // 会分成两份 known_hosts：隧道接受过的公钥，终端模式下还要再接受一次。
+            "HOME" to (homeDir ?: "/data/data/com.dshhandheld.app"),
             "TERM" to "xterm-256color"
         )
         if (auth is Auth.Password) m["DROPBEAR_PASSWORD"] = auth.password
@@ -298,6 +300,15 @@ class SshTunnel(
         /** dbclient 可执行文件路径：由 DshApp.onCreate 注入（nativeLibraryDir/libdbclient.so）。 */
         @Volatile
         var binPath: String? = null
+
+        /**
+         * dbclient 的 `HOME`：同样由 DshApp.onCreate 注入（`filesDir`）。
+         *
+         * 必须与终端模式（TuiActivity 的 `filesDir`）指向同一处，否则 `known_hosts`
+         * 会分两份，同一主机的 TOFU 信任要在两个模式里各接受一次。
+         */
+        @Volatile
+        var homeDir: String? = null
 
     }
 }

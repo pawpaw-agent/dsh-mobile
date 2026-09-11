@@ -10,3 +10,8 @@ local.properties
 # local APK downloads (CI artifacts)
 apk-dl/
 .rtree.json
+
+# CodeGraph 项目索引（codegraph init 生成 codegraph.db 与锁文件）。
+# 原先是仓库里一个被跟踪的 .codegraph/.gitignore 占位文件；改用这一行更干净，
+# 效果相同：索引数据永不入库。
+.codegraph/
