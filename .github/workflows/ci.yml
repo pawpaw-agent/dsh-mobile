@@ -28,15 +28,16 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Gradle 8.5
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: "8.5"
+        # 刻意不写 gradle-version：版本由 android/gradle/wrapper/gradle-wrapper.properties
+        # 决定，`./gradlew` 自行下载。此前 CI 写死 8.5、wrapper 也写 8.5、本地脚本还调
+        # 裸 `gradle` —— 三个出处，改一处就会静默漂移。
 
       - name: Run conformance gate (coverage + selftest + check)
         run: |
           cd android
-          gradle :terminal-conformance:conformance --no-daemon
+          ./gradlew :terminal-conformance:conformance --no-daemon
 
       # Invariant, not a nicety: terminal-conformance contains android.util /
       # android.graphics stand-ins so the reference emulator links on a plain JVM.
@@ -45,7 +46,7 @@ jobs:
       - name: Verify the harness stays out of the app's dependency graph
         run: |
           cd android
-          if gradle :app:dependencies --configuration releaseRuntimeClasspath --no-daemon \
+          if ./gradlew :app:dependencies --configuration releaseRuntimeClasspath --no-daemon \
                | grep -q "terminal-conformance"; then
             echo "::error:::app must never depend on :terminal-conformance (android.* stubs would enter the APK)"
             exit 1
@@ -61,13 +62,32 @@ jobs:
       - name: Set up Android SDK (NDK)
         uses: android-actions/setup-android@v3
 
+      # 缓存按「构建脚本 + localoptions.h」的哈希取键：dropbear 版本号写在脚本里，
+      # 脚本一改键就变，所以不会用旧产物冒充新版本。命中时省掉 clone + 交叉编译。
+      - name: Cache dropbear build
+        id: dropbear-cache
+        uses: actions/cache@v4
+        with:
+          path: build-dropbear-output
+          key: dropbear-${{ runner.os }}-${{ hashFiles('scripts/build-dropbear.sh', 'scripts/localoptions.h') }}
+
       - name: Locate NDK and build dbclient
+        if: steps.dropbear-cache.outputs.cache-hit != 'true'
         run: |
           ndk="$($ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
                  --list_installed | sed -E 's/( +[|] +)/|/g;s/ +$//' | \
                  grep '^  ndk' | cut -d '|' -f 4 | sort | head -n1)"
           echo "NDK: $ndk"
           ANDROID_NDK_HOME="$ANDROID_HOME/$ndk" ./scripts/build-dropbear.sh
+
+      - name: Report cache status
+        run: |
+          ls -la build-dropbear-output/
+          if [ "${{ steps.dropbear-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "✓ 复用缓存的 dbclient（scripts/ 未变）"
+          else
+            echo "✓ 重新编译 dbclient"
+          fi
 
       - name: Upload dbclient
         uses: actions/upload-artifact@v4
@@ -94,10 +114,9 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Set up Gradle 8.5
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: "8.5"
+        # 版本来源同 conformance job：wrapper 是唯一出处。
 
       - name: Fetch dropbear dbclient
         uses: actions/download-artifact@v4
@@ -135,7 +154,7 @@ jobs:
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
           cd android
-          gradle assembleRelease --no-daemon
+          ./gradlew assembleRelease --no-daemon
 
       - name: Remove signing material
         if: always()

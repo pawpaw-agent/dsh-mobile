@@ -57,6 +57,30 @@ def main():
     if msg is None:
         raise SystemExit("usage: mirror-via-api.py --message MSG")
 
+    # 拒绝镜像「有未提交改动」的工作区。
+    #
+    # 本脚本的文件**内容取自磁盘**，而文件清单取自 `git ls-files`；两者不一致时会
+    # 提交出一个坏版本。实测踩过一次：MainActivity.kt 已改（引用了新的 UiKit），
+    # 而 UiKit.kt 还是未跟踪文件（不在 `git ls-files` 里），于是镜像推上去的
+    # MainActivity 引用了一个不存在的类，CI 直接编译失败（`Unresolved reference: UiKit`）。
+    #
+    # 未跟踪文件本身不阻塞（它们本来就不该被镜像），但会列出来：因为
+    # 「已跟踪文件引用了未跟踪文件」正是上面那个坑的形态。
+    dirty = subprocess.check_output(
+        ["git", "status", "--porcelain", "--untracked-files=no"], text=True
+    ).strip()
+    if dirty:
+        raise SystemExit("工作区有未提交的改动，拒绝镜像（先 commit）：\n" + dirty)
+    untracked = subprocess.check_output(
+        ["git", "ls-files", "--others", "--exclude-standard",
+         "scripts", "android", "docs"],
+        text=True,
+    ).strip()
+    if untracked:
+        print("注意：以下未跟踪文件不会被镜像（先确认没有已跟踪文件引用它们）：")
+        for line in untracked.splitlines():
+            print("   ", line)
+
     # Local index: path -> mode, straight from git (authoritative for exec bits).
     index = subprocess.check_output(
         ["git", "ls-files", "-s"], text=True
