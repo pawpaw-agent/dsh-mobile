@@ -95,29 +95,51 @@
 
 ## 附录 B：许可证核对结论
 
-**结论：为了许可证，其实不必重写。** 依据（2026-09-11 核对）：
+**结论：GPL-3.0 这个声明结果上是对的，但当时给的理由是错的。**
+（2026-09-11 核对；本条经过一次反转，下面是订正后的版本）
+
+### 两个 Termux AAR：Apache-2.0 ✔
 
 - Termux 根 `LICENSE.md` 整个仓库 GPLv3，但 **`terminal-view` 与 `terminal-emulator` 在
-  「Exceptions」中列为 Apache-2.0**；上游
-  [jackpal/Android-Terminal-Emulator](https://github.com/jackpal/Android-Terminal-Emulator)
-  本身即 Apache-2.0（带 `LICENSE` + `MODULE_LICENSE_APACHE2` + `NOTICE`），两个模块的源码
-  文件**无任何 GPL 头**（逐个 grep 确认）
-- `termux-shared/LICENSE.md`：库为 **MIT**，GPLv3-only 仅限 `com/termux/shared/termux/*`
-  ——我们 vendored 的是 `com/termux/shared/terminal/io/`，**不在该范围内**
+  「Exceptions」中列为 Apache-2.0**（`v0.118.1` 与 `master` 措辞一致）
+- 上游 [jackpal/Android-Terminal-Emulator](https://github.com/jackpal/Android-Terminal-Emulator)
+  本身即 Apache-2.0（带 `LICENSE` + `MODULE_LICENSE_APACHE2` + `NOTICE`）；其 `libtermexec/`
+  （JNI pty）与 `emulatorview/`（Java 模拟器）正是 Termux 这两个模块的来源，源码文件
+  **无任何 GPL 头**
+- 因此**打包进 APK 的 43 个 `com.termux.terminal` / `com.termux.view` 类是 Apache-2.0**
 
-APK 逐类核对（78 个 `com.termux.*` 类；本表实测自 `apk-dl/v013/app-release.apk` 的 DEX）：
+### vendored 的 7 个 extrakeys 文件：GPLv3-only ✘（关键订正）
 
-| 包 | 类数 | 许可 |
+先前记的「MIT，不在 GPLv3-only 范围内」**是错的**。错误来源：核的是 **`master`**，而项目
+pin 的是 **`v0.118.1`**，两者 `termux-shared/LICENSE.md` 的结构**正好相反**：
+
+| tag | `termux-shared` 主许可 | MIT 例外清单 |
 |---|---|---|
-| `com.termux.terminal` | 21 | Apache-2.0 |
-| `com.termux.view` + `.textselection` | 22 | Apache-2.0 |
-| `com.termux.shared.terminal.io.extrakeys` | 35 | MIT |
-| `com.termux.shared.termux.*`（真正的 GPLv3-only） | **0** | —— |
+| `v0.118.1`（本项目所用） | **GPLv3 only** | **逐文件列举**，不含 `terminal/io/*` |
+| `v0.118.2` / `v0.118.3` | GPLv3 only | 同上 |
+| `v0.119.0-beta.1` 起 | MIT | 反向：GPLv3-only 收窄为默认目录 `shared/termux/*` |
 
-因此项目**本可**改用 Apache-2.0 / MIT，只需保留 Termux 与 ATE 的归属声明。⇒ 本计划的
-价值在于**自主可控与可扩展性**，不是解除许可证约束。若哪天决定不做，改许可 + 补 NOTICE
-是十几分钟的事，不必写一行代码。
+而 extrakeys 在 0.119 恰好被**移进** `com/termux/shared/termux/extrakeys/` —— 即收窄后
+仍属 GPLv3-only 的那个目录，且不在 MIT 例外里。**所以升级 Termux 也解不开这个约束：
+这 7 个文件在所有版本下都是 GPLv3-only。**
 
-**未决**：是否重判项目自身声明的许可证（现为 GPL-3.0）是**单独决策**，本记录不代为下结论；
-vendored 文件头里写的「GPL-3.0」按上面的核对结果应是 MIT（源自 Termux），详见
-`README.md` 的「Termux 组件的 vendoring」。
+### 对项目的实际影响
+
+| 组件 | 许可 | 依据 |
+|---|---|---|
+| `terminal-view` / `terminal-emulator`（43 类 + `libtermux.so`） | Apache-2.0 | 根 `LICENSE.md` 例外条款 |
+| 7 个 vendored `shared/terminal/io/**`（含 `extrakeys`） | **GPLv3-only** | `termux-shared/LICENSE.md` @ `v0.118.1` |
+| `com.termux.shared.termux.*` | **0 个类** | 未打包 |
+| Dropbear `dbclient` / `dbkey` | MIT 风格 | 随附 `LICENSE` |
+
+⇒ 只要那 7 个文件还在源码里，**整个项目就必须是 GPL-3.0**。想改用 MIT/Apache-2.0，唯一
+合法路径是**先用自研实现替掉它们**（额外键栏约 250–350 行 Kotlin），此后源码里不再有
+GPL 组件。这已不是「补个 NOTICE 的事」，而是一笔要真机回归的独立工程。
+
+**未决**：是否值得为许可证自由做这次重写，仍未决定。
+
+### 合规缺口（与选哪个许可证无关，两边都该补）
+
+`terminal-view`/`terminal-emulator` 是 **Apache-2.0，要求随附许可证文本**，但当前 APK 里
+**没有**：CI 把 dropbear 的 `LICENSE.txt` 拷进 `jniLibs/`，而 AGP 只打包那里的 `.so`，
+那个 `.txt` 进不了 APK。

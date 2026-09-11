@@ -137,6 +137,14 @@ JitPack 上，而且确实包含这些类**——"改用依赖就能删掉 1 493
 
 ### 4.1 顺带要修的文档/许可证表述
 
+> ⚠️ **本表第一行与第四行已被后续核对推翻**（2026-09-11 晚，改核项目实际 pin 的
+> `v0.118.1` 而非 `master`）：`termux-shared` 在 `v0.118.1` 的主许可**就是 GPLv3 only**，
+> MIT 例外逐文件列举且**不含** `terminal/io/*`；extrakeys 在 0.119 迁入
+> `shared/termux/extrakeys/` 后仍属 GPLv3-only。**所以 7 个头注释写的 "GPL-3.0" 是对的，
+> 项目声明 GPL-3.0 也是对的**——错的只是当时给的理由。订正后的完整结论见
+> `docs/terminal-rewrite-plan.md` 附录 B 与 `README.md`「Termux 组件的 vendoring」。
+> 下表仅作为「当时是怎么判断错的」的记录保留。
+
 | 说法 | 现状 | 实际 |
 |---|---|---|
 | 7 个头注释都写 "GPL-3.0" | `…/terminal/io/**/*.java` 头部 | `termux-shared/LICENSE.md`：**MIT**，GPLv3-only 只限 `com/termux/shared/termux/*` —— 这些文件不在该目录下 |
@@ -197,8 +205,8 @@ JitPack 上，而且确实包含这些类**——"改用依赖就能删掉 1 493
 | `android.enableJetifier=true` | `gradle.properties` | **实测两个 Termux AAR 里 `android/support` 出现 0 次**，其余依赖全是 androidx → 可去掉，省掉每次构建的字节码重写 |
 | `build-dropbear` 每次 run 都重新 clone + 交叉编译 | `ci.yml:55-76` | 按 `DROPBEAR_VERSION` + `localoptions.h` 哈希缓存（当前单个 run 约 4 分钟，其中这条占大头） |
 | `paths:` 过滤 | `ci.yml:6-9` | 不含 `docs/**`（文档改动不触发 CI，合理）；`package.json` 也不触发，但那个文件建议删（§1） |
-| `.git` 21 MB | 2 347 个松散对象 19.11 MiB，pack 仅 137.81 KiB | `git gc` 可回收大半；这是**本地仓库**卫生，不影响远端 |
-| 工作区 121 MB `apk-dl/` | 18 个历史版本 APK 存档（已 ignore） | 建议清理；里面 `v170/shot.sh` 还引用改名前路径 `/home/xsj/dsh-mobile/…` |
+| `.git` 21 MB | 2 347 个松散对象 19.11 MiB，pack 仅 137.81 KiB | 已 `git gc`：`.git` 降到 9.7 MB |
+| 工作区 121 MB `apk-dl/` | 18 个历史版本 APK 存档（已 ignore） | **已删除**（2026-09-11，用户确认）；仓库工作区从 133 MB 降到 12 MB |
 
 ---
 
@@ -275,10 +283,27 @@ CI 只做编译与一致性**。在改不到真机的前提下动这两处，风
   字段），只降低单函数长度，收益不足以承担「连接屏是主界面、错了就连不上」的风险。
 - **结论**：等有一次真正的连接屏回归窗口时再做，且优先做跨文件版本。
 
+### 本地一次性清理（2026-09-11 执行，均经用户确认）
+
+仓库外与仓库内的本地垃圾一并清掉，工作区 **133 MB → 12 MB**：
+
+| 对象 | 体积 | 说明 |
+|---|---|---|
+| `apk-dl/` | 121 MB | 18 个历史开发版 APK + 调试截图 + 插件 tarball（已 ignore） |
+| `dsh-verify/` | 45 MB | 验证工作台：49 张截图 + node_modules；**脚本（apk 清单/签名解析、A/B 探针等 ~100 KB）一并删除** —— 需要时按需重写 |
+| `dbx/` `dbx2/` `dbdrop/` | 22 MB | 9-9 那天的 dropbear 本地交叉编译试验，已被 CI 路径取代 |
+| `revert-apk/` `pty-apk/` `ptytest` `ptytest2` | 8 MB | 阶段 1 pty 与回退验证的临时副本/编译产物，该工作已收尾 |
+| `android/app/build/` `local.properties` `assets/licenses/` | 2 MB | 陈旧构建产物、本机 SDK 路径、尚未接入的许可证文本 |
+| `android/gradlew.bat` | 3 KB | Windows 批处理；全仓无引用（Linux 开发 + ubuntu CI）。需要时 `gradle wrapper` 可重新生成 |
+
+**保留**：`~/dsh-handheld-0.1.4.apk`（0.1.4 尚未发 Release，这是产物副本）、
+`~/dsh-handheld-0.1.{2,3}.apk`（已发布，可重下）与你的笔记文件。
+
 ### 仍然建议做、但本次未做的
 
 - §2.2 里两个推送脚本的 44 行公共样板（`gh()` 等）抽成 `scripts/ghapi.py`；本次只给
   `mirror-via-api.py` 加了防线，没动结构 —— 两个脚本语义不同（增量 vs 整树），合并要谨慎。
-- `.gitignore` 里的 `apk-dl/`（本地 121 MB 历史 APK 存档）未删除：它是本地文件、未入库，
-  删不删由你定；审计只说「建议清理」。
+- 许可证修复（见 §4.1 与 `docs/terminal-rewrite-plan.md` 附录 B）：项目声明 GPL-3.0
+  结果合法但理由错误；且 Apache-2.0 组件（terminal-view / terminal-emulator）的许可证
+  文本**未随 APK 分发**，这是实打实的合规缺口。
 

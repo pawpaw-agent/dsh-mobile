@@ -22,10 +22,17 @@ Android 不允许覆盖安装，必须先卸载旧版（已保存的连接配置
 
 ## 许可
 
-GPL-3.0。SSH 终端模式集成了 Termux [terminal-view](https://github.com/termux/termux-app)，
-本项目以 GPL-3.0 发布；上游对这两个模块的许可声明与项目自身声明不是一回事，核对见
-`README.md` 的「Termux 组件的 vendoring」。另打包 Dropbear `dbclient` 与第三方移动端适配
-插件 [dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile)（MIT），各自许可证随附。
+GPL-3.0。**原因是 `java/com/termux/shared/terminal/io/` 下那 7 个 vendored 文件为
+GPLv3-only**（Termux `v0.118.1` 的 `termux-shared` 主许可；其 MIT 例外逐文件列举，不含
+`terminal/io/*`）。Gradle 依赖 `terminal-view` / `terminal-emulator` 本身是 Apache-2.0。
+完整核对见 `README.md` 的「Termux 组件的 vendoring」与 `docs/terminal-rewrite-plan.md`
+附录 B。
+
+另打包 Dropbear `dbclient` / `dropbearkey`（MIT 风格）与第三方移动端适配插件
+[dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile)（MIT），各自许可证随附。
+
+> **发布前待确认**：Apache-2.0 要求随附许可证文本，当前 APK 内没有 —— CI 把 dropbear 的
+> `LICENSE.txt` 拷进 `jniLibs/`，而 AGP 只打包那里的 `.so`，那个 `.txt` 进不了 APK。
 
 > 各版本附带组件与许可结论一致，版本之间没有差异。
 
