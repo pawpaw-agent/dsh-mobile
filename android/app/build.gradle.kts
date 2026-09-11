@@ -24,10 +24,6 @@ android {
     namespace = "com.dshhandheld.app"
     compileSdk = 34
 
-    // CI 安装这个确切的 NDK 并把版本写进环境变量，构建脚本与 workflow 因此不会漂移。
-    // 回退值让本地构建在变量缺失时仍可用（AGP 会在缺包时自行下载）。
-    ndkVersion = System.getenv("ANDROID_NDK_VERSION") ?: "25.1.8937393"
-
     signingConfigs {
         getByName("debug") {
             storeFile = file("debug.keystore")
@@ -52,13 +48,6 @@ android {
         targetSdk = 34
         versionCode = 31
         versionName = "0.1.4"
-
-        // 只构建实际打包的 ABI。dbclient 也只有 arm64-v8a（见 README「仅 arm64」），
-        // 多构建其它 ABI 只会拖慢构建并留下无用的 .so。
-        // 注意：`ndk { }` 必须写在 defaultConfig 内——写在 android 直下会编译失败。
-        ndk {
-            abiFilters += "arm64-v8a"
-        }
     }
 
     buildTypes {
@@ -89,23 +78,6 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-
-    // 自研 pty（native pty 分配 + 子进程启动）：见 docs/terminal-rewrite-plan.md 阶段 1。
-    //
-    // 为什么要自己写：Termux 的 libtermux.so 是我们要替换的最后一层 native 依赖；
-    // 而且它的行为契约有两处容易搞错（waitFor 对被信号终止的子进程返回**负**信号号、
-    // 子进程靠 setsid 后 open(pts) 自动获得控制终端），自己实现后由
-    // app/src/main/cpp/dsh_pty_test.c 在宿主机上直接验证。
-    //
-    // 库名必须仍是 libtermux.so：Termux 的 com.termux.terminal.JNI 里写死了
-    // System.loadLibrary("termux")，阶段 1 的目标就是**顶替**它（这样才能在真机上
-    // 用原版 emulator 验证我们的 pty）。阶段 5 连同 JNI 类一起改名。
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
 }
 
 dependencies {
@@ -130,17 +102,5 @@ dependencies {
     // JitPack 多模块坐标：group 为 termux/termux-app 仓库点分路径（否则 Gradle
     // 会把 4 段坐标当成 group:artifact:version:module 而找不到）。
     // terminal-view 依赖 terminal-emulator（含 NDK 原生渲染，x86/x86_64/arm 全部 ABI）。
-    //
-    // 我们自带 libtermux.so（见上面 externalNativeBuild），而 terminal-emulator 的
-    // AAR 里也有一个同名文件，合并时会冲突。pickFirsts 保留我们的——CI 会校验打包后
-    // 的 .so 含 dsh-handheld 的构建标记，所以「留下的是哪一个」不是靠信任而是靠检查。
     implementation("com.github.termux.termux-app:terminal-view:0.118.1")
-}
-
-android {
-    packaging {
-        jniLibs {
-            pickFirsts += "**/libtermux.so"
-        }
-    }
 }
