@@ -107,6 +107,58 @@ class MainActivity : Activity() {
     private var unauthorizedCleanTried = false
     private lateinit var prefs: android.content.SharedPreferences
 
+    // ── 界面状态（单一真相）────────────────────────────────────────────────
+    /**
+     * 顶层屏幕。
+     *
+     * 提示页（错误页 / 401 令牌页）**刻意不在此枚举内**：它是盖在当前屏幕之上的覆盖层，
+     * 隐藏后自然露出下面那一屏，所以不需要记录「从哪来」。把它塞进这个枚举反而要多维护
+     * 一个「返回目标」字段。
+     */
+    private enum class Screen { CONNECT, WEB }
+
+    /**
+     * 连接屏内部的三步（三张卡片互斥显示）。
+     *
+     * 此前 `step1Card` / `stepGuideStep2` / `stepGuideCard` 的 visibility 由 **5 处**
+     * 各自设置，其中 `showConnectScreen()` 与 `guideBackToStep2()` 的差异（前者复位进度行、
+     * 后者不复位）只体现在代码里而没有名字。现在只由 [showStep] 一处决定。
+     */
+    private enum class ConnectStep { MODE, CREDENTIALS, CONNECTING }
+
+    private var screen = Screen.CONNECT
+    private var connectStep = ConnectStep.MODE
+
+    /**
+     * 切到某一屏。**唯一**改动连接屏可见性的地方。
+     *
+     * 收敛的动机是两个已发生的 bug：`about:blank` 死路（把「有没有页面」等同于
+     * `url 非空`）与错误页文案错位（两个页面共用容器、谁先构造谁定文案）——两者都不是
+     * 算错，而是「该显示哪一屏」没有单一表示，于是某个分支漏了。
+     */
+    private fun showScreen(target: Screen) {
+        if (screen != target) Log.i(TAG, "screen: $screen → $target")
+        screen = target
+        connectView?.visibility = if (target == Screen.CONNECT) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * 切到连接屏内的某一步。
+     *
+     * @param resetGuide 是否把 ①②③ 进度行复位。只有「主动回到连接屏」（[showConnectScreen]）
+     *   需要复位——Step3 是上一轮连接的残留，不复位会出现「连接中…」却早已连上的矛盾画面；
+     *   而在 Step3 与本步之间来回切换时（[guideBackToStep2]）**不能**复位，否则刚跑出来的
+     *   「✓ 已连上」会被抹掉。
+     */
+    private fun showStep(step: ConnectStep, resetGuide: Boolean = false) {
+        if (connectStep != step) Log.i(TAG, "connectStep: $connectStep → $step（resetGuide=$resetGuide）")
+        connectStep = step
+        step1Card?.visibility = if (step == ConnectStep.MODE) View.VISIBLE else View.GONE
+        stepGuideStep2?.visibility = if (step == ConnectStep.CREDENTIALS) View.VISIBLE else View.GONE
+        stepGuideCard?.visibility = if (step == ConnectStep.CONNECTING) View.VISIBLE else View.GONE
+        if (resetGuide) resetGuideLines()
+    }
+
     private companion object {
         const val TAG = "DshHandheld"
         // 配色与尺寸基元集中在 UiKit（此前 MainActivity / TuiActivity 各定义一份）。
@@ -323,14 +375,14 @@ class MainActivity : Activity() {
                 autoConnectSsh()
             } else {
                 Log.i(TAG, "onCreate: 分支3 停留连接屏（有 url 但 ssh 配置不可用）")
-                connectView?.visibility = View.VISIBLE
+                showScreen(Screen.CONNECT)
             }
         } else if (currentUrl?.startsWith("http") == true) {
             // 必须是**正式页面**才算「已在网页上」。此前判的是 `!isNullOrBlank()`，
             // 于是「断开连接」载入的 about:blank 也命中这一支 → 连接屏被 GONE 掉、
             // WebView 又是空白，重开 App 就是一条无 UI 出口的死路（BACK 只 moveTaskToBack）。
             Log.i(TAG, "onCreate: 分支1 直接回网页（复用保活 WebView，不重连不重载）")
-            connectView?.visibility = View.GONE
+            showScreen(Screen.WEB)
         } else {
             Log.i(TAG, "onCreate: 分支3 停留连接屏（无保存 url 且 WebView 非正式页面：$currentUrl）")
         }
@@ -340,13 +392,13 @@ class MainActivity : Activity() {
     private fun autoConnectSsh() {
         val savedSsh = SshConfig.load(prefs)
         if (savedSsh == null || !savedSsh.isComplete) {
-            connectView?.visibility = View.VISIBLE; return
+            showScreen(Screen.CONNECT); return
         }
         val app = application as DshApp
         // 用户可能已在连接屏手动点了「连接」：自动恢复不抢占
         if (!beginConnect()) { Log.i(TAG, "autoConnectSsh: 连接进行中，让位给手动连接"); return }
         status("自动重建 SSH 隧道…")
-        connectView?.visibility = View.VISIBLE
+        showScreen(Screen.CONNECT)
         Log.i(TAG, "autoConnectSsh: 冷启动恢复 " +
             "${savedSsh.user}@${savedSsh.host}:${savedSsh.port} → " +
             "远端 ${savedSsh.remoteHost}:${savedSsh.remotePort} auth=${savedSsh.authType}")
@@ -370,7 +422,7 @@ class MainActivity : Activity() {
             autoFetchToken(tunnel)
             runOnUiThread {
                 // lastUrl 与 prefs["url"] 由 connectWeb 自己写，这里不必再来一遍。
-                connectView?.visibility = View.GONE
+                showScreen(Screen.WEB)
                 sshTokenAck = false
                 connectWeb(base)
                 refreshConnectState()
@@ -578,7 +630,7 @@ class MainActivity : Activity() {
         step1Card!!.addView(stepHint("· 看 dsh 网页：管理和浏览电脑上的 dsh 界面\n· 打开终端：远程敲命令，像在电脑前一样"),
             rowParams(top = dp(8), width = ViewGroup.LayoutParams.MATCH_PARENT))
         step1Card!!.addView(UiKit.button(this@MainActivity, "下一步", UiKit.Style.PRIMARY) {
-            step2Card?.visibility = View.VISIBLE; step1Card?.visibility = View.GONE
+            showStep(ConnectStep.CREDENTIALS)
         }, rowParams(top = dp(12), height = dp(46), width = ViewGroup.LayoutParams.MATCH_PARENT))
 
         // ── Step 2：连接信息 ───────────────────────────────────────────
@@ -676,7 +728,7 @@ class MainActivity : Activity() {
         // Step 2 底部：上一步 + 主按钮（文案跟模式）
         val step2Nav = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
         step2Nav.addView(UiKit.button(this@MainActivity, "上一步", UiKit.Style.SECONDARY, textSize = 12f) {
-            step1Card?.visibility = View.VISIBLE; step2Card?.visibility = View.GONE
+            showStep(ConnectStep.MODE)
         }, LinearLayout.LayoutParams(dp(88), dp(46)).apply { marginEnd = dp(6) })
         connectMainBtn = UiKit.button(
             this@MainActivity,
@@ -759,7 +811,7 @@ class MainActivity : Activity() {
         // 从网页按返回后再点一下就能回去，不必重建隧道（重建会换本地端口）
         backToWebButton = UiKit.button(this@MainActivity, "回到网页", UiKit.Style.PRIMARY, textSize = 12f) {
             if (webView?.url?.startsWith("http") == true) {
-                connectView?.visibility = View.GONE
+                showScreen(Screen.WEB)
             } else {
                 // WebView 已空（如断开后）→ 有隧道就重新加载，没有则提示重连
                 val url = lastUrl
@@ -889,7 +941,7 @@ class MainActivity : Activity() {
      */
     private fun connectWeb(url: String) {
         status("连接中… $url")
-        connectView?.visibility = View.GONE
+        showScreen(Screen.WEB)
         lastUrl = url
         unauthorizedCleanTried = false
         loadRetriesLeft = 3
@@ -1181,7 +1233,7 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
-            connectView?.visibility == View.VISIBLE -> {
+            screen == Screen.CONNECT -> {
                 Log.i(TAG, "BACK: 连接屏 → 退到后台（隧道保持）")
                 moveTaskToBack(true)
             }
@@ -1249,8 +1301,7 @@ class MainActivity : Activity() {
 
     // ── 引导流 Step3 状态（类级：connectViaSsh/autoConnectSsh/onPageFinished 共用）────
     private fun guideStep3Show() {
-        stepGuideCard?.visibility = View.VISIBLE
-        stepGuideStep2?.visibility = View.GONE
+        showStep(ConnectStep.CONNECTING)
         guideLine(1, "① 检查电脑 正在连接…", state = true)
         guideLine(2, "② 建立安全通道", state = true)
         guideLine(3, "③ 打开 dsh 网页", state = true)
@@ -1282,8 +1333,7 @@ class MainActivity : Activity() {
         )
     }
     private fun guideBackToStep2() {
-        stepGuideStep2?.visibility = View.VISIBLE
-        stepGuideCard?.visibility = View.GONE
+        showStep(ConnectStep.CREDENTIALS)
     }
 
     /** 关闭并释放当前 SSH 隧道（无则 no-op）。所有权在 DshApp，这里只是转发。 */
@@ -1324,11 +1374,8 @@ class MainActivity : Activity() {
      *  Step3 是上一轮连接的残留，直接显示会出现「连接中…」却早已连上的矛盾画面。 */
     private fun showConnectScreen() {
         Log.i(TAG, "showConnectScreen: 回连接屏 Step2（tunnel=${(application as DshApp).sshTunnel != null}）")
-        step1Card?.visibility = View.GONE
-        stepGuideCard?.visibility = View.GONE
-        stepGuideStep2?.visibility = View.VISIBLE
-        resetGuideLines()
-        connectView?.visibility = View.VISIBLE
+        showStep(ConnectStep.CREDENTIALS, resetGuide = true)
+        showScreen(Screen.CONNECT)
         refreshConnectState()
     }
 
