@@ -78,8 +78,19 @@ static int configure_pty(int fd, int rows, int columns, char* error, size_t erro
 
 int dsh_pty_open(int rows, int columns, char* device, size_t device_length,
                  char* error, size_t error_length) {
-    /* O_NOCTTY on the master: the parent must not acquire a controlling terminal. */
-    int master = posix_openpt(O_RDWR | O_NOCTTY);
+    /*
+     * O_CLOEXEC matters and is easy to omit: posix_openpt() does NOT set it on its
+     * own. Without it the master leaks across execve into every process this JVM
+     * later starts — ProcessBuilder children such as dropbearkey and the token fetch
+     * would each hold a copy, and while any copy lives the slave never sees hangup,
+     * so a closed session can fail to end. The reference implementation opens
+     * /dev/ptmx with O_CLOEXEC for the same reason; dsh_pty_test.c asserts it.
+     *
+     * O_NOCTTY is defensive documentation rather than a necessity (/dev/ptmx is not a
+     * tty and so cannot become a controlling terminal), but it states the intent: the
+     * parent must never acquire one.
+     */
+    int master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
     if (master < 0) {
         set_error(error, error_length, "posix_openpt failed: %s", strerror(errno));
         return -1;

@@ -18,9 +18,11 @@
 
 #include <errno.h>
 #include <poll.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
@@ -249,6 +251,8 @@ static void test_no_descriptor_leak(void) {
         }
     }
     int before = dsh_pty_open_descriptor_count();
+    struct timespec started, finished;
+    clock_gettime(CLOCK_MONOTONIC, &started);
     for (int round = 0; round < rounds; round++) {
         int pid = 0, fd = -1;
         if (dsh_pty_spawn("/bin/sh", "/", argv, envp, 24, 80, &pid, &fd, device,
@@ -261,8 +265,55 @@ static void test_no_descriptor_leak(void) {
         reap(fd, pid);
         dsh_pty_close(fd);
     }
+    clock_gettime(CLOCK_MONOTONIC, &finished);
     int after = dsh_pty_open_descriptor_count();
     check_int(after, before, "descriptor count is unchanged after 200 sessions");
+
+    /*
+     * Report the cost, because "this layer is not a performance factor" should be a
+     * measurement rather than an opinion. It is called a handful of times per session
+     * and never per byte, so a microsecond-scale number here is the expected result.
+     */
+    double elapsed_ms = (double) (finished.tv_sec - started.tv_sec) * 1000.0
+                        + (double) (finished.tv_nsec - started.tv_nsec) / 1e6;
+    printf("         %d sessions in %.1f ms = %.2f ms each (spawn + reap + close)\n",
+           rounds, elapsed_ms, elapsed_ms / rounds);
+}
+
+/* ── Test 7: the master must not survive execve into unrelated processes ───── */
+static void test_cloexec(void) {
+    printf("  [7] the master fd does not leak into other processes\n");
+    int fd = -1;
+    char device[DSH_PTY_DEVICE_MAX], error[256];
+
+    fd = dsh_pty_open(24, 80, device, sizeof(device), error, sizeof(error));
+    if (fd < 0) {
+        check(0, "pty opened for the cloexec test");
+        printf("         error: %s\n", error);
+        return;
+    }
+
+    /*
+     * Two assertions, because they fail for different reasons. The flag check names
+     * the cause; the exec check proves the consequence, and would still catch a
+     * regression if the flag were replaced by some other mechanism.
+     */
+    int flags = fcntl(fd, F_GETFD);
+    check((flags & FD_CLOEXEC) != 0, "FD_CLOEXEC is set on the master");
+
+    /*
+     * This is the failure that matters in this app: the JVM starts helper processes
+     * (dropbearkey, the token fetch) while a session is live. If the master is
+     * inherited, those processes hold the pty open and the slave never sees hangup.
+     */
+    char probe[256];
+    snprintf(probe, sizeof(probe),
+             "[ -e /proc/self/fd/%d ] && exit 1 || exit 0", fd);
+    int rc = system(probe);
+    int survived = (rc != -1) && WIFEXITED(rc) && WEXITSTATUS(rc) == 1;
+    check(!survived, "the fd is absent in a child after exec");
+
+    dsh_pty_close(fd);
 }
 
 /* ── Test 5: a missing program fails visibly rather than silently ─────────── */
@@ -316,6 +367,7 @@ int main(void) {
     test_no_descriptor_leak();
     test_missing_program();
     test_controlling_terminal();
+    test_cloexec();
     printf("\n%d checks, %d failure(s)%s\n", checks, failures, failures == 0 ? "  ok" : "");
     return failures == 0 ? 0 : 1;
 }
