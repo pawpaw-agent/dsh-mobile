@@ -16,6 +16,7 @@
 
 #include "dsh_pty.h"
 
+#include <errno.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,6 +44,23 @@ static void check_int(int actual, int expected, const char* what) {
         printf("    ok   %s (= %d)\n", what, actual);
     } else {
         printf("    FAIL %s: expected %d, got %d\n", what, expected, actual);
+        failures++;
+    }
+}
+
+/*
+ * Send a newline to wake a blocked `read` in the child.
+ *
+ * The return value is checked rather than discarded: on a distribution that builds
+ * with _FORTIFY_SOURCE, write() carries warn_unused_result and ignoring it is a
+ * compile error under -Werror. Checking it is also simply correct — if the write
+ * fails the test would otherwise fail later for a misleading reason.
+ */
+static void send_line(int fd) {
+    ssize_t written = write(fd, "\n", 1);
+    if (written != 1) {
+        checks++;
+        printf("    FAIL could not write to the pty: %s\n", strerror(errno));
         failures++;
     }
 }
@@ -178,10 +196,10 @@ static void test_window_size(void) {
     }
     usleep(150 * 1000);
     check_int(dsh_pty_set_window_size(fd, 40, 120), 0, "set_window_size returns success");
-    write(fd, "\n", 1);
+    send_line(fd);
     check(wait_for(fd, "40 120", output, sizeof(output), 3000),
           "child sees the resized geometry");
-    write(fd, "\n", 1);
+    send_line(fd);
     reap(fd, pid);
     dsh_pty_close(fd);
 }

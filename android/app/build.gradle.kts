@@ -52,6 +52,13 @@ android {
         targetSdk = 34
         versionCode = 31
         versionName = "0.1.4"
+
+        // 只构建实际打包的 ABI。dbclient 也只有 arm64-v8a（见 README「仅 arm64」），
+        // 多构建其它 ABI 只会拖慢构建并留下无用的 .so。
+        // 注意：`ndk { }` 必须写在 defaultConfig 内——写在 android 直下会编译失败。
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
@@ -98,12 +105,6 @@ android {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
         }
-    }
-
-    ndk {
-        // 只构建实际打包的 ABI。dbclient 也只有 arm64-v8a（见 README「仅 arm64」），
-        // 多构建其它 ABI 只会增大构建时间并留下无用的 .so。
-        abiFilters += "arm64-v8a"
     }
 }
 
