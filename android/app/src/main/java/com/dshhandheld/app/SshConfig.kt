@@ -18,8 +18,11 @@ import java.io.File
  * `keyPath` 非空，而终端模式在缺私钥时会回退到 `dropbearkey` 现生成一对
  * （见 `TuiActivity.resolveKeyPath`）。所以这里只提供字段与 [toAuth]，
  * 终端模式的回退逻辑仍留在原处。
+ *
+ * 可见性是 public（默认）：`DshApp.ensureTunnel` 是 public 且以它作参数，
+ * 而 Kotlin 不允许 public 函数暴露 internal 类型。
  */
-internal data class SshConfig(
+data class SshConfig(
     val host: String = "",
     val port: Int = DEFAULT_SSH_PORT,
     val user: String = "",
