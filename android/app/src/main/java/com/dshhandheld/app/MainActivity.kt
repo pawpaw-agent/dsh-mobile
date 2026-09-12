@@ -1260,7 +1260,9 @@ class MainActivity : Activity() {
     private fun revalidateTunnel() {
         val app = application as? DshApp ?: return
         val tunnel = app.sshTunnel ?: return
-        if (webView?.url?.startsWith("http") != true) return
+        // 只在真的停在网页上时才管隧道（webView 还没建好时同样跳过）
+        val url = webView?.url
+        if (url == null || !url.startsWith("http")) return
         val cfg = SshConfig.load(prefs) ?: return
         if (!cfg.isComplete) return
         Thread {

@@ -315,6 +315,13 @@ class SshTunnel(
                 }
                 continue
             }
+            // 等待期间隧道可能已被 close()（用户在连接屏重连 / 换了配置）——
+            // 那就别再认领这个进程，否则它会在新隧道旁边抢端口
+            if (!started.get()) {
+                Log.i(TAG, "隧道已关闭，放弃本次连接结果")
+                reap(p)
+                return false
+            }
             // 端口能连还不够：确认隧道真的能把流量送出去再收回来
             if (!probeDataPlane(port)) {
                 Log.w(TAG, "dbclient tune #$attempt 端口就绪但探针无响应，丢弃重试")
