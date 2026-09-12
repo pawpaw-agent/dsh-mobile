@@ -161,13 +161,28 @@ class DshApp : Application() {
                 DiagLog.w(TAG, "退出历史 #$i: ${fmt.format(Date(r.timestamp))} ${exitReasonText(r.reason)}"
                     + " importance=${r.importance} rss=${r.rss / 1024}MB desc=${r.description}")
             }
-            // 最近一条单独留给诊断页顶部显示
-            val r0 = reasons[0]
-            DiagLog.lastExitSummary = fmt.format(Date(r0.timestamp)) + "  " + exitReasonText(r0.reason)
+            // 顶部摘要优先给**最近的异常退出**：包更新 / 用户主动停止 / 正常退出都是
+            // "无事发生"，却会把真正的问题（崩溃、被杀）从最近一条的位置挤掉 ——
+            // 实测就是这样：安装新版后第一条永远是「应用被更新」。
+            val notable = reasons.firstOrNull { isAbnormal(r.reason) } ?: reasons[0]
+            DiagLog.lastExitSummary = fmt.format(Date(notable.timestamp)) + "  " + exitReasonText(notable.reason)
         } catch (e: Exception) {
             // 个别 ROM 会对非系统包拒绝这个查询；记录但不影响启动
             DiagLog.w(TAG, "读退出历史失败: ${e.javaClass.simpleName}: ${e.message}")
         }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun isAbnormal(reason: Int): Boolean = when (reason) {
+        ApplicationExitInfo.REASON_LOW_MEMORY,
+        ApplicationExitInfo.REASON_CRASH,
+        ApplicationExitInfo.REASON_CRASH_NATIVE,
+        ApplicationExitInfo.REASON_ANR,
+        ApplicationExitInfo.REASON_SIGNALED,
+        ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
+        ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
+        ApplicationExitInfo.REASON_DEPENDENCY_DIED -> true
+        else -> false
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
@@ -234,6 +249,9 @@ class DshApp : Application() {
             }
             sshTunnel = t
             tunnelFingerprint = fp
+            // 隧道真的起来了才需要保活。放在成功分支里（而不是 build()），
+            // 免得拨号失败也留下一个常驻前台服务。
+            TunnelService.start(this, "已连接到 ${cfg.host}")
             DiagLog.i(TAG, "ensureTunnel: 已建立 ${t.localBaseUrl}")
             return t
         }
@@ -245,6 +263,8 @@ class DshApp : Application() {
             sshTunnel?.close()
             sshTunnel = null
             tunnelFingerprint = null
+            // 隧道没了就不该继续占着前台服务
+            TunnelService.stop(this)
         }
     }
 

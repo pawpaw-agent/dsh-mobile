@@ -1445,6 +1445,12 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
+            // 覆盖层优先关掉：否则连接屏的 BACK 语义（moveTaskToBack）会把 App 退到后台、
+            // 而诊断页还盖在上面 —— 回来时仍是一个"按什么都没反应"的页面。
+            diagView?.visibility == View.VISIBLE -> {
+                DiagLog.i(TAG, "BACK: 关闭诊断页")
+                diagView?.visibility = View.GONE
+            }
             screen == Screen.CONNECT -> {
                 DiagLog.i(TAG, "BACK: 连接屏 → 退到后台（隧道保持）")
                 moveTaskToBack(true)

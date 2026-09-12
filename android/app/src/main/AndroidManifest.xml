@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 隧道保活：没有前台服务时 App 是 cached 进程，会被冻结（连 dbclient 子进程一起）
+         并在内存压力下被优先杀掉。见 TunnelService 的类注释。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:name=".DshApp"
@@ -33,6 +37,17 @@
             android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
             android:windowSoftInputMode="adjustResize" />
+
+        <!-- 隧道保活。specialUse：端口转发不属预置类型（dataSync 在 Android 15+ 还有
+             每日时长上限，不适合长会话），故走 catch-all 并写明用途。 -->
+        <service
+            android:name=".TunnelService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="保持到用户电脑的 SSH 隧道，使用户离开应用后仍能继续使用 dsh" />
+        </service>
 
     </application>
 
