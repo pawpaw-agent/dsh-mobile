@@ -61,6 +61,37 @@ node scripts/check-mobile-hooks.mjs          # 需要本机装有 dsh
 node scripts/check-mobile-hooks.mjs --update-contract
 ```
 
+## 第二层半：真机 WebView 验证（推荐先做这个）
+
+```sh
+node scripts/device-ui-verify.mjs --url "http://<本机 LAN IP>:38082/?token=<token>" --label adapted
+```
+
+它驱动**真机上 App 自己的 WebView**（经 adb 的 `webview_devtools_remote` socket），
+所以注入是 App 干的、插件是 App 喂的、视口是真的手机视口 —— 只有"把 WebView 指到某个
+地址"这一步是脚本做的。已实测通过：`[data-mobile-nav]` 出现 `frame / drawer-actions /
+explorer / session-log / fab` 五个标记，无横向溢出。
+
+前置：
+1. 装 **debug** 包（CI 出 `dsh-handheld-debug` artifact）。只有 debuggable 才开
+   `setWebContentsDebuggingEnabled` —— release 包拿不到 devtools socket。
+2. `adb forward tcp:9222 localabstract:webview_devtools_remote_<app pid>`
+3. 一个 WebView 能访问到的地址。`scripts/lan-proxy.mjs` 可以把靶子推到 LAN：
+   ```sh
+   dsh web --no-open --port 38083
+   node scripts/lan-proxy.mjs --target 127.0.0.1:38083 --listen 0.0.0.0:38082
+   ```
+
+> ⚠️ **这条路径的覆盖范围有限，别当成端到端验证**：它绕开了 SSH 隧道，而 dsh 有
+> browser-trust fence —— 明文 HTTP 下带非回环 `Origin` 的请求按非本机处理，**配置平面**
+> （`settings.*` / `credentials.*` / `llm.discoverModels`）**强制仅回环**，所以 LAN 访问
+> 下这些接口必 403（见 `docs/archive/dsh-protocol.md` §2.5）。它验证的是**适配的 DOM 层**：
+> 插件有没有加载、有没有把桌面布局改成移动布局。**要验配置平面与完整数据流，必须在
+> 设备上配好 SSH 连接**（App 的正常使用路径）。
+>
+> Android WebView 的 devtools 还有个脾气：**只有首条 `Page.navigate` 稳**，
+> `Page.enable` / `Runtime.evaluate` 会间歇性挂住。脚本已按此调整顺序并容忍 enable 失败。
+
 ## 第三层：真实页面渲染（需要浏览器能联网）
 
 ```sh
