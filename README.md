@@ -171,29 +171,68 @@ of Android Keystore"），故直接按官方指引使用平台 Keystore，不引
 
 ## 版本与升级
 
-### 依赖为什么“不是最新”
+### 工具链
+
+| 组件 | 版本 | 出处 / 约束 |
+|---|---|---|
+| Gradle | **9.7.1** | `android/gradle/wrapper/gradle-wrapper.properties`，wrapper 是**唯一出处** |
+| Android Gradle 插件 | **9.4.0** | 最高支持 API 37；最低要 Gradle 9.6.0 / JDK 17 / build-tools 36.0.0 |
+| Kotlin | **内置（KGP 2.2.10）** | AGP 9 起内置编译，**不再单独声明插件** |
+| JDK | 17 | AGP 9 与 Gradle 9.7 的共同下限（Gradle 9.7 支持 17–26） |
+| compileSdk | **36** | |
+| targetSdk | **34**（未动） | 见「待办的现代化项」 |
+| minSdk | 26 | |
+
+**`org.jetbrains.kotlin.android` 插件已移除。** AGP 9 的 `android.builtInKotlin` 默认为
+`true`，此时再应用它就直接构建失败：
+
+```
+The 'org.jetbrains.kotlin.android' plugin is no longer required for Kotlin support since AGP 9.0.
+```
+
+同理 `android.kotlinOptions{}` 也没了 —— 内置 Kotlin 的 `jvmTarget` 默认取
+`compileOptions.targetCompatibility`（本项目 17），写与不写等价，不写反而少一处漂移。
+要换比 AGP 自带的 2.2.10 更高的 KGP，只能走顶级 build 文件的
+`buildscript { classpath(...) }`，**不能**再用 `plugins{}` 块（AGP 9 起 KGP 是 AGP 的
+运行时依赖，`plugins{}` 里声明它是非法组合）。
+
+### 依赖上限
 
 升级上限受**两个独立约束**，必须同时满足：
 
-1. **AAR 元数据的 `minCompileSdk`** ≤ 当前 `compileSdk`（34）；
-2. **传递依赖的 `kotlin-stdlib` metadata 版本** ≤ 本机 Kotlin 编译器可读上限
-   （Kotlin 1.9.22 → metadata 2.0.0）。
+1. **AAR 元数据的 `minCompileSdk`** ≤ 当前 `compileSdk`（36）；
+2. **传递依赖的 `kotlin-stdlib` metadata 版本** ≤ Kotlin 编译器可读上限。
 
-第二条更隐蔽：**`webkit` 从 1.16.0 起引入 `kotlin-stdlib:2.1.20`**（metadata 2.1.0），
-在 Kotlin 1.9.22 下会直接编译失败（`Module was compiled with an incompatible version of
-Kotlin`）。`core-ktx` 到 1.13.1 为止仍只依赖 `kotlin-stdlib:1.8.22`。
+第 2 条曾把项目锁死：Kotlin 1.9.22 最多读到 metadata 2.0.0，而 **`webkit` 从 1.16.0 起
+引入 `kotlin-stdlib:2.1.20`**（metadata 2.1.0），一升就编译失败（`Module was compiled with
+an incompatible version of Kotlin`）。改用内置 Kotlin（KGP 2.2.10，可读 metadata 2.1.0）
+后**这条约束已经消失** —— 下面两个库都只需要 `kotlin-stdlib:2.1.20`。
 
 | 库 | 当前 | 升级上限 | 卡在哪 |
 |---|---|---|---|
-| `androidx.webkit:webkit` | **1.15.0** | 1.15.0 | 1.16.0 起要 kotlin-stdlib 2.1.20 |
-| `androidx.core:core-ktx` | **1.13.1** | 1.13.1 | 1.15.0 起要 minCompileSdk 35 |
+| `androidx.webkit:webkit` | **1.17.0** | 1.17.0 | 1.18.0 尚无正式版（当前只有 alpha01） |
+| `androidx.core:core-ktx` | **1.18.0** | 1.18.0 | 1.19.0 要 `minCompileSdk` **37**（且要求 AGP ≥ 9.1.0） |
 | `termux terminal-view` | 0.118.1 | — | 见下方 vendoring 说明 |
+
+> **这两个数字怎么来的**（比查文档可靠）：解包 AAR，读
+> `META-INF/com/android/build/gradle/aar-metadata.properties` 里的 `minCompileSdk` 与
+> `minAndroidGradlePluginVersion`；`kotlin-stdlib` 版本读同名 `.pom`。
+> 例：`core-1.18.0.aar` → `minCompileSdk=36, minAndroidGradlePluginVersion=8.9.1`；
+> `core-1.19.0.aar` → `minCompileSdk=37, minAndroidGradlePluginVersion=9.1.0`；
+> `webkit-1.17.0.aar` → `minCompileSdk=33`。
 
 ### 待办的现代化项
 
-- **Kotlin 1.9.22 → 2.x**：解锁 `webkit` 1.16+ 与更高版本 androidx 的前提，涉及 K2
-  编译器迁移，需真机回归。
-- **compileSdk / targetSdk 34 → 36**，连带 AGP → 9.x、Gradle → 9.x。与上一条耦合。
+- **`targetSdk` 34 → 35/36**：`compileSdk` 只决定「能调用哪些 API」，`targetSdk` 决定
+  「系统按哪一版的行为对待这个 App」—— 后者是**运行时行为变更**。34→35 恰好是最重的一档：
+  Android 15 起强制 edge-to-edge（系统栏区域不再自动让位），35→36 还有一批前台服务与
+  权限收紧。本项目主界面是一整个 WebView 加一层终端，正是最吃 insets 的形状，
+  **需真机回归后再动**，不宜混在依赖升级里。
+  另注：AGP 9 起 `android.sdk.defaultTargetSdkToCompileSdkIfUnset` 默认为 `true`，
+  **不写 `targetSdk` 就会自动跟随 `compileSdk`** —— 所以这里必须显式写死。
+- **`compileSdk` 36 → 37**：解锁 `core-ktx` 1.19.0，连带 build-tools 37 与
+  `platforms;android-37.0`（API 37 起平台包带小版本号，仓库里是 `37.0` / `37.1` / `37.2`，
+  没有裸的 `android-37`）。单列一步，便于定位问题。
 - **启用 R8**：`release` 变体目前 `isMinifyEnabled = false`。首次启用压缩/混淆需真机验证
   （R8 可能裁掉运行期才引用的类），不宜与签名变更同时进行。
 

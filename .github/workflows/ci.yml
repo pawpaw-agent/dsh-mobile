@@ -167,6 +167,14 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      # AGP 9.4 要求 SDK Build Tools ≥ 36.0.0（36.0.0 也是它的默认值），compileSdk 36
+      # 需要 `platforms;android-36`。两者都不保证已预装在 runner 镜像里。AGP 虽能按需
+      # 自动下载，但显式装上能让「缺组件」这类失败在一步之内看清，而不是混在 Gradle 日志中。
+      - name: Install SDK platform + build-tools required by AGP 9
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platforms;android-36" "build-tools;36.0.0"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
         # 版本来源同 conformance job：wrapper 是唯一出处。

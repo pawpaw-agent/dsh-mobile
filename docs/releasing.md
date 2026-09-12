@@ -38,13 +38,23 @@ GPLv3-only**（Termux `v0.118.1` 的 `termux-shared` 主许可；其 MIT 例外�
 
 ## 依赖升级上限（结论）
 
+工具链：Gradle **9.7.1** + AGP **9.4.0** + AGP **内置 Kotlin**（KGP 2.2.10）+ JDK **17**，
+`compileSdk` **36** / `targetSdk` **34**（未动）/ `minSdk` 26。`org.jetbrains.kotlin.android`
+插件已移除：AGP 9 起 `android.builtInKotlin` 默认 true，再应用它会直接构建失败。
+
 依赖升级上限受**两个独立约束**，必须同时满足：① AAR 元数据的 `minCompileSdk` ≤ 当前
-`compileSdk`（34）；② 传递依赖的 `kotlin-stdlib` metadata 版本 ≤ 本机 Kotlin 编译器可读
-上限（Kotlin 1.9.22 → metadata 2.0.0）。第二条更隐蔽：`webkit` 从 1.16.0 起引入
-`kotlin-stdlib:2.1.20`（metadata 2.1.0），在 Kotlin 1.9.22 下会直接编译失败
-（`Module was compiled with an incompatible version of Kotlin`），而 `core-ktx` 到 1.13.1
-为止仍只依赖 `kotlin-stdlib:1.8.22`。因此当前的安全上限是 **core-ktx 1.13.1 +
-webkit 1.15.0**，再往上必须连同 Kotlin 2.x 一起升。
+`compileSdk`（36）；② 传递依赖的 `kotlin-stdlib` metadata 版本 ≤ Kotlin 编译器可读上限。
+第②条曾把项目锁死 —— Kotlin 1.9.22 最多读到 metadata 2.0.0，而 `webkit` 从 1.16.0 起引入
+`kotlin-stdlib:2.1.20`（metadata 2.1.0），一升就编译失败（`Module was compiled with an
+incompatible version of Kotlin`）。改用内置 Kotlin（KGP 2.2.10）后**该约束已解除**。
+因此当前可用上限是 **core-ktx 1.18.0 + webkit 1.17.0**；再往上走 core-ktx 1.19.0 需要
+`compileSdk` 37（并要求 AGP ≥ 9.1.0），是单独一步。
+
+> **`targetSdk` 为什么不跟着 `compileSdk` 一起升**：`compileSdk` 只决定能调用哪些 API，
+> `targetSdk` 决定系统按哪一版的行为对待 App，后者是运行时行为变更。34→35 恰好最重
+> （Android 15 起强制 edge-to-edge），而本项目主界面是一整个 WebView 加一层终端，
+> 最吃 insets，需真机回归后再动。注意 AGP 9 起不写 `targetSdk` 会自动跟随 `compileSdk`，
+> 故必须显式写死。
 
 > 同一约束在 `android/app/build.gradle.kts` 的 `dependencies` 注释与 `README.md`
-> 的「依赖为什么"不是最新"」里各有展开；本节是给发布说明用的短版本，结论以本节为准。
+> 的「依赖上限」里各有展开；本节是给发布说明用的短版本，结论以本节为准。

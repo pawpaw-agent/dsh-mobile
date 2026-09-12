@@ -1,6 +1,6 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+    // 不再声明 `org.jetbrains.kotlin.android`：AGP 9 内置 Kotlin，见顶级 build.gradle.kts。
 }
 
 // ── 发布签名 ────────────────────────────────────────────────────────────────
@@ -22,7 +22,10 @@ val hasReleaseSigning: Boolean = releaseStorePath != null &&
 
 android {
     namespace = "com.dshhandheld.app"
-    compileSdk = 34
+    // 36 是 androidx.core 1.18.0 的下限（其 AAR 元数据 minCompileSdk=36），也是 AGP 9
+    // 默认 build-tools（36.0.0）对应的平台版本。再往上（37）留给 core-ktx 1.19.0，
+    // 见 README「版本与升级」。
+    compileSdk = 36
 
     signingConfigs {
         getByName("debug") {
@@ -45,6 +48,16 @@ android {
     defaultConfig {
         applicationId = "com.dshhandheld.app"
         minSdk = 26
+        // targetSdk 刻意停在 34，**不跟着 compileSdk 走**。
+        //
+        // compileSdk 只决定「能调用哪些 API」，targetSdk 决定「系统按哪一版的行为对待
+        // 这个 App」——后者是运行时行为变更，而 34→35 恰好是最重的一档：Android 15 起
+        // 强制 edge-to-edge（系统栏区域不再自动让位），35→36 还有一批前台服务与权限
+        // 收紧。本项目的主界面是一整个 WebView 加一层终端，正是最吃 insets 的形状。
+        //
+        // 依赖升级不该顺带改变运行时行为，所以这一档单列，需要真机回归后再动。
+        // 另注：AGP 9 起 `android.sdk.defaultTargetSdkToCompileSdkIfUnset` 默认为 true，
+        // 即**不写 targetSdk 就会自动跟随 compileSdk** —— 这里必须显式写死。
         targetSdk = 34
         versionCode = 36
         versionName = "0.1.9"
@@ -75,29 +88,31 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    // 这里原先有一个 `kotlinOptions { jvmTarget = "17" }`，AGP 9 起被移除：
+    // 内置 Kotlin 的 `kotlin.compilerOptions.jvmTarget` 默认就取上面的
+    // `compileOptions.targetCompatibility`（17），显式再写一遍是多余的。
+    // 不显式写还有一个好处：两边不会各自漂移。
 }
 
 dependencies {
     // 升级上限受**两个**独立约束，二者都必须满足：
     //
-    // 1) AAR 元数据的 minCompileSdk —— 不得超过当前 compileSdk 34
-    //    core 1.13.1 → 34；core 1.15.0 → 35；1.17.0 → 36；1.19.0 → 37
+    // 1) AAR 元数据的 minCompileSdk —— 不得超过当前 compileSdk 36
+    //    core 1.13.1 → 34；1.15.0 → 35；1.17.0/1.18.0 → 36；1.19.0 → 37（并要求 AGP ≥ 9.1.0）
     //    webkit 1.15.0/1.17.0 → 33
+    //    实测方法：解包 AAR 看 META-INF/com/android/build/gradle/aar-metadata.properties
     //
-    // 2) 传递依赖的 kotlin-stdlib metadata 版本 —— 不得高于本机 Kotlin 编译器
-    //    （当前 1.9.22，最多读 metadata 2.0.0）。这条更隐蔽：webkit 1.9.0–1.15.0
-    //    不带 kotlin 依赖，而 **webkit 1.16.0 起引入 kotlin-stdlib 2.1.20**
-    //    （metadata 2.1.0），会直接编译失败：
+    // 2) 传递依赖的 kotlin-stdlib metadata 版本 —— 不得高于 Kotlin 编译器可读上限。
+    //    这条曾把项目锁死：Kotlin 1.9.22 只能读到 metadata 2.0.0，而 webkit 1.16.0 起
+    //    引入 kotlin-stdlib 2.1.20（metadata 2.1.0），一升就编译失败：
     //      "Module was compiled with an incompatible version of Kotlin"
-    //    core-ktx 到 1.13.1 为止仍只依赖 kotlin-stdlib 1.8.22，故可用。
+    //    改用 AGP 9 内置 Kotlin（KGP 2.2.10）后这条不再构成限制 —— core-ktx 1.18.0 与
+    //    webkit 1.17.0 都只依赖 kotlin-stdlib 2.1.20。
     //
-    // 因此当前安全上限是 core-ktx 1.13.1 + webkit 1.15.0。再往上必须连同
-    // Kotlin 2.x 一起升 —— 那是一笔独立的现代化工程，见 README「版本与升级」。
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.webkit:webkit:1.15.0")
+    // 因此当前上限是 core-ktx 1.18.0 + webkit 1.17.0。再往上走 core-ktx 1.19.0 需要
+    // compileSdk 37（连带 build-tools 37 与 `platforms;android-37.0`）—— 单列一步。
+    implementation("androidx.core:core-ktx:1.18.0")
+    implementation("androidx.webkit:webkit:1.17.0")
     // Termux 终端组件（GPL-3.0，见项目 LICENSE）：TUI 模式的终端渲染 + 软键盘交互。
     // JitPack 多模块坐标：group 为 termux/termux-app 仓库点分路径（否则 Gradle
     // 会把 4 段坐标当成 group:artifact:version:module 而找不到）。
