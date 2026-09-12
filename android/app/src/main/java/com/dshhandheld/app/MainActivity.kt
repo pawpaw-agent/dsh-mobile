@@ -1404,6 +1404,8 @@ class MainActivity : Activity() {
     private fun rebuildTunnel(cfg: SshConfig) {
         Thread {
             val app = application as DshApp
+            // 必须在 ensureTunnel(force=true) **之前**取：它会 close() 旧隧道并把 localBaseUrl 置空
+            val prevBase = app.sshTunnel?.localBaseUrl
             val t = app.ensureTunnel(cfg, force = true)
             val base = t?.localBaseUrl
             if (base == null) {
@@ -1411,13 +1413,30 @@ class MainActivity : Activity() {
                 onUi { status("重连失败，请回连接屏手动重试"); refreshConnectState(); endConnect() }
                 return@Thread
             }
-            autoFetchToken(t)
             onUi {
-                DiagLog.i(TAG, "rebuildTunnel: 已重建 base=$base，重新加载")
-                sshTokenAck = false
-                connectWeb(base)
-                refreshConnectState()
-                endConnect()
+                if (base == prevBase) {
+                    // **同 origin 重建：不重载页面。** 这是省流量的关键一笔。
+                    //
+                    // 端口没变 → origin 没变 → cookie 仍有效、WebView 缓存仍能命中，页面自己的
+                    // 重试会把后续请求接到新隧道上；整页重载纯属浪费。实测一次冷加载 ≈4.7 MB
+                    // （其中 /assets/* 约 446 KB，因为 dsh 没给这些内容哈希命名的文件发
+                    // Cache-Control/ETag，每次都必须重新下载），而重载之后 SPA 还要把会话历史
+                    // 重新拉一遍 —— 对长会话那才是大头。
+                    //
+                    // 代价：页面上那条已经断掉的流不会自己恢复，需要手动刷新
+                    // （连接屏的「回到网页」就是一次重载）。
+                    DiagLog.i(TAG, "rebuildTunnel: 同 origin（$base）→ 不重载页面（省流量）")
+                    refreshConnectState()
+                    endConnect()
+                } else {
+                    // origin 变了：服务端 cookie 名含 authority，必然失效 → 必须重走 token 交换并重载
+                    DiagLog.i(TAG, "rebuildTunnel: origin 变了（$prevBase → $base）→ 重新加载")
+                    autoFetchToken(t)
+                    sshTokenAck = false
+                    connectWeb(base)
+                    refreshConnectState()
+                    endConnect()
+                }
             }
         }.apply { name = "tunnel-rebuild"; isDaemon = true }.start()
     }

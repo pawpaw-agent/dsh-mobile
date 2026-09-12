@@ -147,8 +147,9 @@ mWakefulness=Dozing
 ### 0.1.5 的处理
 
 - `MainActivity.onResume` → `revalidateTunnel()`：用**真流量探针**（往隧道里发一个 HTTP
-  请求）校验，不健康就 `ensureTunnel(force = true)` 重建并 `connectWeb(base)` 重载 ——
-  同端口重建也会重载，因为这里**显式**调了 `connectWeb`，不依赖 `onLocalBaseChanged`。
+  请求）校验，不健康就 `ensureTunnel(force = true)` 重建。
+  **0.1.9 起同 origin 重建不再重载页面**（见下面「整页重载的流量代价」）；origin 变了才重走
+  token 交换 + 重载。
 - `SshTunnel.isHealthy()` 同样换成真探针（原来只看端口能连）。
 - **前台服务** ✅ **0.1.8 加回来了**（`TunnelService`，`specialUse` 类型）：进程不再进
   cached 队列，既不冻结、oom_adj 也低得多，后台断线因此能自愈。刻意**不申请**
@@ -156,6 +157,37 @@ mWakefulness=Dozing
   最低重要性的静默通知）。隧道建立时启动、`closeTunnel()` 时停止。
   注：1.11.0 删掉的那个前台服务宿主是 `AgentMonitorService`（dropbox 里 36 条崩溃全是它），
   与隧道保活不是一回事。
+
+### 整页重载的流量代价（0.1.9 实测）
+
+用户反馈「每次都要重新加载网页浪费太多流量」，于是量了一次冷加载（临时 dsh 实例，不动在用的那个）：
+
+| 资源 | 传输 | 缓存指令 |
+|---|---|---|
+| `/assets/index-*.js` | 214 KB | **无 `Cache-Control` / 无 `ETag` / 无 `Last-Modified`** |
+| `/assets/vendor-*.js` | 210 KB | 同上 |
+| `/assets/index-*.css` + `vendor-*.css` | 21 KB | 同上 |
+| `/plugins/??…`（51 个模块合并包） | **4.33 MB** | ✅ `public, max-age=31536000, immutable` |
+| **合计** | **≈4.68 MB** | |
+
+两个事实：
+
+1. 4.33 MB 那个包是**可缓存**的（`immutable`）→ 重载能命中 WebView 缓存；
+2. 但 **~446 KB 的 JS/CSS 没有任何验证器** —— 文件名明明带内容哈希（`index-BKQ_L1z6.js`），
+   本该永久缓存，却按 HTTP 语义**每次重载都要重新下载**。这是 dsh 静态资源那侧的缺口：
+   `/plugins/` 设了头，`/assets/` 没设。
+
+而 0.1.5 曾把它变得更糟：`rebuildTunnel` 里显式 `connectWeb(base)`，于是**每次隧道重建都
+整页重载**（端口没变也一样），还顺带清 cookie、重走 token 交换；重载后 SPA 还要把会话历史
+重新拉一遍 —— 对长会话那才是真正的大头。
+
+0.1.9 改法：`rebuildTunnel` 比较重建前后的 origin，**相同就不重载**（cookie 仍有效、缓存仍
+命中，页面自己的重试会把后续请求接到新隧道上），只在 origin 变化时重载。
+代价：同 origin 重建后页面上那条已断的流不会自己恢复，需要手动刷新
+（连接屏的「回到网页」就是一次重载）。
+
+**仍未做**：那 446 KB 只能靠 dsh 侧补缓存头，或在 App 里自建 `/assets/*` 磁盘缓存
+（`shouldInterceptRequest` 拦下自己发，绕过 WebView 缓存）。属于独立改动。
 
 ---
 
