@@ -92,6 +92,26 @@ explorer / session-log / fab` 五个标记，无横向溢出。
 > Android WebView 的 devtools 还有个脾气：**只有首条 `Page.navigate` 稳**，
 > `Page.enable` / `Runtime.evaluate` 会间歇性挂住。脚本已按此调整顺序并容忍 enable 失败。
 
+## 隧道不变量：真机秒级检查
+
+```sh
+node scripts/device-tunnel-verify.mjs --serial 192.168.0.175:33199
+```
+
+上面几层管的是**适配对不对**，这一层管的是**隧道通不通**。隧道失效是**静默**的：
+App 说 `connected`，页面却永远加载不完。2026-09-12 在真机上抓到过一整条这样的链
+（假 connected / dbclient 进程泄漏 / 端口漂移），脚本把那次事故的不变量变成可重复的断言：
+
+| 断言 | 防的是什么 |
+|---|---|
+| 隧道能过流量（HTTP 拿到状态行） | 把"本地端口能 connect"当成"隧道可用" —— 残留进程也在监听，connect 会成功而请求永远没回应 |
+| 本地端口是 3080、没漂到 13080 | origin 一变，`localStorage` / 会话草稿就按 origin 分家 |
+| dbclient 进程只有 1 个 | 重连不回收旧进程 → 幽灵占着端口和 SSH 会话 |
+| 日志里没有 bind 失败、末次状态是 `connected` | 假 connected（正是用户看到的那一面） |
+
+退出码 0/1 可直接用在脚本里；判定不了的项目（例如 logcat 缓冲区已滚过）显式标成
+`–` 而不是失败 —— **把"没证据"当失败会让检查失去信任**。
+
 ## 第三层：真实页面渲染（需要浏览器能联网）
 
 ```sh
@@ -152,5 +172,20 @@ node scripts/ui-verify.mjs --base http://127.0.0.1:38082 --token <token>
 ### 仍未覆盖
 
 - 终端模式（TuiActivity）本轮未走查；
-- 断线重连 / 换端口后的页面跟随；
+- **换端口后的页面跟随**：`device-tunnel-verify.mjs` 只断言端口没漂移，
+  没断言 WebView 在 `onLocalBaseChanged` 之后真的重新加载并恢复视图状态；
 - 应用内 JS 对话框（若有）。
+
+### 2026-09-12 之后查到的隧道缺陷（已在 0.1.5 修）
+
+同一批真机上（SM-G7810 / Android 13）后来查出隧道重建路径本身是坏的，与适配无关：
+
+- 熄屏后**整个 App 会被 Android 冻结**（`/proc/<pid>/cgroup` → `freezer:/frozen`），
+  而 **dbclient 子进程继承同一个 cgroup，一起被冻在 `connect()` 里** —— 解冻时
+  三个残留进程同时报 `Connect failed: Software caused connection abort`。
+- 于是看门狗不跑、隧道必死；而 `isAlive()` 只问"进程活着 + 端口能连"，
+  残留进程正好能满足它，**假 connected 会一直持续**（实测 1h33m 无日志）。
+- 每次重连都漏一个 dbclient（实测两轮各 3 个），它们占着 3080 让新进程 bind 失败
+  （`Address already in use` ×2），并把端口从 3080 挤到 13080。
+
+修法与不变量见上文「隧道不变量」一节。

@@ -5,8 +5,8 @@
 > 背景：1.10.0 把 SSH 隧道所有权上移到 `DshApp`，1.11.0 删除了后台通知与其前台服务，
 > 0.1.2 删除了因此变成死代码的 `DshClient` / `Models` / `Rpc`（850 行）与 okhttp3 依赖。
 >
-> **当前版本是 0.1.4（versionCode 31）**：除 §四的行数与计数已按当前树重新实测外，下面
-> 仍是 0.1.2 时的记录。
+> **当前版本是 0.1.5（versionCode 32）**：除 §四的行数与计数已按当前树重新实测外，下面
+> 仍是 0.1.2 时的记录。0.1.5 修掉了隧道重建路径的一组真机缺陷（§二、§三已按实测更新）。
 
 ---
 
@@ -50,10 +50,12 @@
 
 ### 仍未覆盖
 
-- 断线重连 / 换端口后的页面跟随（`SshTunnel` watchdog 路径）
+- **换端口后的页面跟随**：0.1.5 让端口不再漂移（重建前先回收旧 owner 再选端口），
+  但「WebView 在 `onLocalBaseChanged` 之后真的重载并恢复视图状态」仍未上机确认
 - 默认终端尺寸计算：实测 21×40 是**软键盘弹出后**的结果，键盘收起时未复测
 - 应用内 JS 对话框（若有）、长按连发、复制/粘贴
 - WebView context 释放在多窗口 / 字号变更下的行为
+- **熄屏保活**：0.1.5 靠回前台重建，**没有**让隧道在熄屏期间存活（见 §三）
 
 ---
 
@@ -84,9 +86,9 @@ baseMatch  = currentUrl 以 savedUrl 开头
 
 ## 二、待修：`断开连接` 后重开可能白屏死路
 
-> **状态（0.1.4 实测）：仍是待修项。** `MainActivity.kt:331` 现在仍是
-> `} else if (!currentUrl.isNullOrBlank()) {`，并没有收紧成 `startsWith("http")`。
-> 行号见下，随当前的死代码清理会继续漂移。
+> **状态：已修（0.1.5）。** `MainActivity.onCreate` 现在判的是
+> `} else if (currentUrl?.startsWith("http") == true) {`，并在原处留了注释说明
+> `about:blank` 为什么不能再命中这一支。下面保留原始分析作为记录。
 
 **症状**：`断开连接` 后若 Activity 被系统销毁而**进程仍存活**（"不保留活动"、后台回收
 Activity 而保留进程等），重新打开 App 是一个空白 WebView，既没有连接屏入口，按 BACK 也
@@ -107,10 +109,13 @@ Activity 而保留进程等），重新打开 App 是一个空白 WebView，既�
 ```
 
 **影响面**：窄，但一旦命中就是死路（无 UI 出口），修复零风险。等 1.11.0 上机验证后一起改。
+（0.1.5 已按此修法落地。）
 
 ---
 
-## 三、待定：后台掉线、同端口重建时不自动重载
+## 三、后台掉线 / 熄屏冻结 / 同端口重建时不自动重载
+
+### 现象
 
 `SshTunnel` 的看门狗线程（`ssh-tunnel-watchdog`）重建 dbclient 时，若候选端口 3080 仍空闲
 就会重新绑回 3080 → `localBaseUrl` 未变 → **不触发** `onLocalBaseChanged` → `MainActivity`
@@ -119,8 +124,33 @@ Activity 而保留进程等），重新打开 App 是一个空白 WebView，既�
 - 页面自身若重连（前端 SSE/WS 重试）则无感；
 - 否则需要用户手动刷新。
 
-**可能的修法**：`onResume` 时校验隧道健康度（`sshTunnel?.isHealthy()`），不健康或刚重建过
-则重新 `connectWeb(lastUrl)`。需真机确认重载时机是否会打扰正在输入的用户。
+### 更根本的一层：熄屏后整个进程被冻结（2026-09-12 实测）
+
+**这个 App 没有前台服务**（1.11.0 起刻意删掉了后台通知与其前台服务），所以熄屏后它就是一个
+cached 进程，会被 Android 冻结：
+
+```
+mWakefulness=Dozing
+/proc/<pid>/cgroup → 7:freezer:/frozen
+```
+
+关键的一条：**dbclient 是它的子进程，继承同一个 frozen cgroup，一起被冻在 `connect()` 里。**
+解冻瞬间三个残留进程同时报 `Connect failed: Software caused connection abort` —— 那不是
+网络问题（同一时刻 `nc` 能拿到 sshd 的 banner），是它们根本没跑起来过。
+
+后果：冻结期间看门狗不运行 → 隧道必死；而当时的 `isAlive()` 只问"进程活着 + 端口能连"
+（残留进程正好能满足它），于是**假 connected 会一直持续**（实测 1h33m 零日志），回到前台
+看到的是一个永远加载不完的页面。
+
+### 0.1.5 的处理
+
+- `MainActivity.onResume` → `revalidateTunnel()`：用**真流量探针**（往隧道里发一个 HTTP
+  请求）校验，不健康就 `ensureTunnel(force = true)` 重建并 `connectWeb(base)` 重载 ——
+  同端口重建也会重载，因为这里**显式**调了 `connectWeb`，不依赖 `onLocalBaseChanged`。
+- `SshTunnel.isHealthy()` 同样换成真探针（原来只看端口能连）。
+- **没有恢复前台服务**：那是 1.11.0 的刻意决定（代价是常驻通知）。所以熄屏期间隧道仍然
+  不保活，回到前台走一次重建（1-3s 拨号 + 页面重载）。要真正保活必须把前台服务加回来 ——
+  那是一个独立的产品决定，不是缺陷修复。
 
 ---
 
