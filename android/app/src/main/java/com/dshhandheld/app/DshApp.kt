@@ -164,7 +164,7 @@ class DshApp : Application() {
             // 顶部摘要优先给**最近的异常退出**：包更新 / 用户主动停止 / 正常退出都是
             // "无事发生"，却会把真正的问题（崩溃、被杀）从最近一条的位置挤掉 ——
             // 实测就是这样：安装新版后第一条永远是「应用被更新」。
-            val notable = reasons.firstOrNull { isAbnormal(r.reason) } ?: reasons[0]
+            val notable = reasons.firstOrNull { isAbnormal(it.reason) } ?: reasons[0]
             DiagLog.lastExitSummary = fmt.format(Date(notable.timestamp)) + "  " + exitReasonText(notable.reason)
         } catch (e: Exception) {
             // 个别 ROM 会对非系统包拒绝这个查询；记录但不影响启动
