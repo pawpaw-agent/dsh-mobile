@@ -222,3 +222,25 @@ jobs:
         with:
           name: dsh-handheld-release
           path: android/app/build/outputs/apk/release/app-release.apk
+
+      # 另出一份 **debug** 包，专供真机验证移动端适配。
+      #
+      # 为什么需要它：MainActivity 只在 debuggable 时开 `setWebContentsDebuggingEnabled`，
+      # 而 release 包必须保持不可调试（上面那步硬校验）。于是「真机上页面到底被适配成什么样」
+      # 这一层，用 release 包**无法取证** —— 拿不到 WebView 的 DOM。
+      #
+      # 有了 debug 包的 WebView devtools socket，就能 adb forward 后直接查真实渲染结果
+      # （[data-mobile-nav] 在不在、有没有横向溢出），也就是把 scripts/ui-verify.mjs
+      # 对真实页面做的那套断言搬到真机上。见 docs/mobile-ui-verification.md。
+      #
+      # ⚠️ 该产物是 debuggable + debug 签名，**绝不可对外分发**，只是 CI artifact。
+      - name: Build debug APK (for on-device UI verification)
+        run: |
+          cd android
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-handheld-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
