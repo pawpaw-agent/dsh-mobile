@@ -5,7 +5,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.graphics.Typeface
 import android.os.Bundle
-import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -22,6 +21,7 @@ import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 import java.io.File
+import com.dshhandheld.diag.DiagLog
 
 /**
  * dsh-handheld SSH 终端模式 —— Dropbear dbclient + Termux 原生渲染。
@@ -101,7 +101,7 @@ class TuiActivity : Activity() {
             val savedPx = getSharedPreferences("dsh-handheld", MODE_PRIVATE)
                 .getInt("tui_font_size_px", defaultPx)
             val finalPx = savedPx.coerceIn((12 * density).toInt(), (36 * density).toInt())
-            Log.i(TAG, "init font: density=$density default=${defaultPx}px saved=${savedPx}px final=${finalPx}px")
+            DiagLog.i(TAG, "init font: density=$density default=${defaultPx}px saved=${savedPx}px final=${finalPx}px")
             setTextSize(finalPx)
             setTypeface(Typeface.MONOSPACE)
         }
@@ -222,7 +222,7 @@ class TuiActivity : Activity() {
         // 只记 env 的**键名**，不记值：DROPBEAR_PASSWORD 的值就是登录密码。
         // （原写法 `it.take(8)` 恰好只截到 "DROPBEAR" 这个键名而侥幸没泄漏密码，
         //  但缩短键名/换认证方式就会漏 —— 不能靠运气。）
-        Log.i(TAG, "dbclient: args=${args.toList()} envKeys=${env.map { it.substringBefore('=') }}")
+        DiagLog.i(TAG, "dbclient: args=${args.toList()} envKeys=${env.map { it.substringBefore('=') }}")
 
         statusView?.text = "连接 ${cfg.user}@${cfg.host}:${cfg.port} …"
         val client = object : TerminalSessionClient {
@@ -272,7 +272,7 @@ class TuiActivity : Activity() {
         // onEmulatorSet() → startCursorBlinker()（若已就绪届时即闪）。
         terminalView?.requestFocus()
         terminalView?.postDelayed({ showSoftKeyboard() }, 300)
-        Log.i(TAG, "dbclient started via TerminalSession")
+        DiagLog.i(TAG, "dbclient started via TerminalSession")
     }
 
     /**
@@ -297,8 +297,8 @@ class TuiActivity : Activity() {
             val gen = ProcessBuilder(dbkey.absolutePath, "-t", "ed25519", "-f", key.absolutePath)
                 .redirectErrorStream(true).start()
             gen.waitFor()
-            if (!key.exists()) { Log.e(TAG, "dropbearkey failed"); return null }
-            Log.i(TAG, "generated key at ${key.absolutePath}")
+            if (!key.exists()) { DiagLog.e(TAG, "dropbearkey failed"); return null }
+            DiagLog.i(TAG, "generated key at ${key.absolutePath}")
         }
         // 输出公钥到日志（方便用户加到服务端 authorized_keys）
         val dbkey = File(libDir, "libdropbearkey.so")
@@ -307,7 +307,7 @@ class TuiActivity : Activity() {
                 val pub = ProcessBuilder(dbkey.absolutePath, "-y", "-f", key.absolutePath)
                     .redirectErrorStream(true).start()
                 val text = pub.inputStream.bufferedReader().readText().trim()
-                Log.i(TAG, "PUBKEY (add to server ~/.ssh/authorized_keys): $text")
+                DiagLog.i(TAG, "PUBKEY (add to server ~/.ssh/authorized_keys): $text")
             } catch (_: Exception) {}
         }
         return key.absolutePath
@@ -331,7 +331,7 @@ class TuiActivity : Activity() {
             try {
                 reload(ExtraKeysInfo(EXTRA_KEYS_LAYOUT, "default", ExtraKeysConstants.CONTROL_CHARS_ALIASES))
             } catch (e: Exception) {
-                Log.e(TAG, "extra keys layout failed", e)
+                DiagLog.e(TAG, "extra keys layout failed", e)
             }
         }
         extraKeysView = extras
@@ -378,7 +378,7 @@ class TuiActivity : Activity() {
             val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
                     as InputMethodManager
             imm.showSoftInput(tv, InputMethodManager.SHOW_IMPLICIT)
-            Log.i(TAG, "showSoftInput requested (focus=${tv.hasFocus()})")
+            DiagLog.i(TAG, "showSoftInput requested (focus=${tv.hasFocus()})")
         }, 120)
     }
 
@@ -392,7 +392,7 @@ class TuiActivity : Activity() {
         if (tv.setTerminalCursorBlinkerRate(500))
             tv.setTerminalCursorBlinkerState(true, true)
         else
-            Log.w(TAG, "cursor blink rate rejected")
+            DiagLog.w(TAG, "cursor blink rate rejected")
     }
 
     private fun stopCursorBlinker() {

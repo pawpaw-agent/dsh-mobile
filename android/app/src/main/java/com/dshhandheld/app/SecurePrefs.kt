@@ -4,12 +4,12 @@ import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
-import android.util.Log
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import com.dshhandheld.diag.DiagLog
 
 /**
  * 敏感偏好项的静态加密（AES-256-GCM，密钥存 AndroidKeyStore）。
@@ -70,7 +70,7 @@ object SecurePrefs {
             (ks.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
                 ?: generateKey()
         } catch (e: Exception) {
-            Log.w(TAG, "SecurePrefs: 无法取得 Keystore 密钥：${e.javaClass.simpleName}: ${e.message}")
+            DiagLog.w(TAG, "SecurePrefs: 无法取得 Keystore 密钥：${e.javaClass.simpleName}: ${e.message}")
             null
         }
     }
@@ -104,7 +104,7 @@ object SecurePrefs {
             val blob = cipher.iv + ciphertext       // IV 长度随算法固定（GCM 12 字节）
             CIPHER_PREFIX + Base64.encodeToString(blob, Base64.NO_WRAP)
         } catch (e: Exception) {
-            Log.w(TAG, "SecurePrefs: 加密失败：${e.javaClass.simpleName}: ${e.message}")
+            DiagLog.w(TAG, "SecurePrefs: 加密失败：${e.javaClass.simpleName}: ${e.message}")
             null
         }
     }
@@ -121,7 +121,7 @@ object SecurePrefs {
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
             String(cipher.doFinal(ciphertext), Charsets.UTF_8)
         } catch (e: Exception) {
-            Log.w(TAG, "SecurePrefs: 解密失败：${e.javaClass.simpleName}: ${e.message}")
+            DiagLog.w(TAG, "SecurePrefs: 解密失败：${e.javaClass.simpleName}: ${e.message}")
             null
         }
     }
@@ -135,12 +135,12 @@ object SecurePrefs {
     fun getString(prefs: SharedPreferences, key: String): String? {
         val raw = prefs.getString(key, null) ?: return null
         if (!raw.startsWith(CIPHER_PREFIX)) {
-            Log.i(TAG, "SecurePrefs: $key 为历史明文，迁移为密文")
+            DiagLog.i(TAG, "SecurePrefs: $key 为历史明文，迁移为密文")
             putString(prefs, key, raw)
             return raw
         }
         val plain = decrypt(raw)
-        if (plain == null) Log.w(TAG, "SecurePrefs: $key 解密失败（密钥失效？），按未配置处理")
+        if (plain == null) DiagLog.w(TAG, "SecurePrefs: $key 解密失败（密钥失效？），按未配置处理")
         return plain
     }
 
@@ -148,7 +148,7 @@ object SecurePrefs {
     fun putString(prefs: SharedPreferences, key: String, value: String) {
         val encrypted = encrypt(value)
         if (encrypted == null) {
-            Log.w(TAG, "SecurePrefs: $key 加密不可用，回退明文存储")
+            DiagLog.w(TAG, "SecurePrefs: $key 加密不可用，回退明文存储")
             prefs.edit().putString(key, value).apply()
         } else {
             prefs.edit().putString(key, encrypted).apply()

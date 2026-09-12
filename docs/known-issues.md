@@ -5,8 +5,9 @@
 > 背景：1.10.0 把 SSH 隧道所有权上移到 `DshApp`，1.11.0 删除了后台通知与其前台服务，
 > 0.1.2 删除了因此变成死代码的 `DshClient` / `Models` / `Rpc`（850 行）与 okhttp3 依赖。
 >
-> **当前版本是 0.1.5（versionCode 32）**：除 §四的行数与计数已按当前树重新实测外，下面
-> 仍是 0.1.2 时的记录。0.1.5 修掉了隧道重建路径的一组真机缺陷（§二、§三已按实测更新）。
+> **当前版本是 0.1.6（versionCode 33）**：除 §四的行数与计数已按当前树重新实测外，下面
+> 仍是 0.1.2 时的记录。0.1.5 修掉了隧道重建路径的一组真机缺陷（§二、§三已按实测更新）；
+> 0.1.6 补齐了机内取证入口（§四）。
 
 ---
 
@@ -154,7 +155,7 @@ mWakefulness=Dozing
 
 ---
 
-## 四、日志体系：已补关键路径，仍缺取证入口
+## 四、日志体系：关键路径 + 机内取证入口（0.1.6 补齐）
 
 ### 补日志之前的实况（1.11.1 之前）
 
@@ -202,9 +203,11 @@ mWakefulness=Dozing
 
 ### 仍未做（当时评估为可延后；已完成的单列标注）
 
-- **应用内日志查看器**（环形缓冲 + 连接屏入口）：手机上出问题时唯一证据仍是 `status()`
-  那一行给用户看的、刻意去术语的文案；看 logcat 需要电脑 adb，而 adb 恰恰最常不可用。
-  这是**取证链路**最后的缺口。
+- **应用内日志查看器** ✅ **已完成（0.1.6）**：`DiagLog`（内存环形缓冲 600 条 + 后台线程
+  追加到 `filesDir/diag.log`，超 256 KB 时旋转一代）+ 连接屏头部的「诊断」入口。
+  页面显示：**上次退出原因**（读系统落盘的 `ApplicationExitInfo`，所以「上次是被低内存杀的
+  还是崩的」不用猜）+ 本次运行日志 + 磁盘日志尾部，可一键复制。
+  为什么必须自己记而不能去读 logcat —— 见下一节。
 - **分级与开关**：仍无 `Log.d/v`，想临时加详细日志 = 改代码 + CI + 安装（十几分钟），
   所以实际上没人会为一次排查去做。
 - **`BuildConfig.DEBUG` 守卫**：release 里日志照留。对本项目**有意保留**——用户只装
@@ -212,6 +215,35 @@ mWakefulness=Dozing
 - **清理死代码** ✅ **已完成（0.1.2，commit `b8199cc`）**：`protocol/DshClient.kt`(505) +
   `Models.kt`(237) + `Rpc.kt`(108) 与 `okhttp3` 依赖一并删除，共 850 行。当前 `protocol/`
   下只剩 `SshTunnel.kt`，`grep -r okhttp android/` 零命中。
+
+### 手机上到底「保存」了什么日志（0.1.6 实测）
+
+这是最容易误判的一件事，所以单列。三类完全不同的东西：
+
+| 类型 | 存在哪 | 重启后 | 应用自己能读吗 |
+|---|---|---|---|
+| **logcat**（`Log.*` 的输出） | 内存环形缓冲（本机实测 `main` 只有 **5 MiB**） | ❌ 丢 | ❌ **读不到** —— `READ_LOGS` 是 `signature\|privileged` |
+| **dropbox**（崩溃/ANR/tombstone 事件） | `/data/system/dropbox`，实测 236 条 / 上限 1000 | ✅ 在 | ❌ 要 `DUMP` 权限，只有 adb shell 能看 |
+| **ApplicationExitInfo**（进程退出历史） | 由 ActivityManager 落盘（实测 18:58 刚写过一次） | ✅ 在 | ✅ **可以**（API 30+，读自己那个包） |
+
+推论：
+
+- 「应用内看日志」**只能靠自己记**（读不到 logcat）——这就是 `DiagLog` 的做法；
+- 「上次为什么没了」不用自己记，系统已经落盘了，`DshApp.reportLastExit()` 直接读；
+- **adb 的 logcat 也不能全信**：本机实测三星的 `View.setRequestedFrameRate` 在 WebView
+  持续重绘时以 **662 条/10 秒**（约 1.1 MB/分钟）刷屏，5 MiB 撑不到 5 分钟 ——
+  我们的行会被冲得一条不剩（0.1.5 那次就是这样，一度误以为「没打日志」）。
+
+**所以用 adb 排查前先压掉那个刷屏**（非持久属性，重启自动失效；撤销把 `W` 换回 `I`）：
+
+```sh
+adb shell setprop log.tag.View W     # 实测 662 条/10s → 1 条/10s
+```
+
+一条真实收获：`dropbox` 里 **36 条 `data_app_crash` 全部**是旧包名 `com.dshmobile.app`
+（v1.5.1 → v1.9.2），栈全是 `AgentMonitorService.startMonitor → DshClient.start →
+DshClient.handshakeLoop`，另有一条 `ForegroundServiceDidNotStartInTimeException`；
+而改名后的 `com.dshhandheld.app` **一条都没有**。这种跨重启的历史，logcat 里留不住。
 
 ### 排查备忘：验证 APK 里的日志字符串
 

@@ -1,6 +1,5 @@
 package com.dshhandheld.protocol
 
-import android.util.Log
 import java.io.Closeable
 import java.io.File
 import java.net.InetSocketAddress
@@ -9,6 +8,7 @@ import java.net.Socket
 import java.util.Collections
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import com.dshhandheld.diag.DiagLog
 
 /**
  * SSH 本地端口转发 —— dbclient 进程方案。
@@ -221,13 +221,13 @@ class SshTunnel(
         for (p in preferredPorts) {
             if (isPortFree(p)) {
                 if (p != preferredPorts.first()) {
-                    Log.w(TAG, "本地端口 ${preferredPorts.first()} 被占用，改用 $p")
+                    DiagLog.w(TAG, "本地端口 ${preferredPorts.first()} 被占用，改用 $p")
                 }
                 return p
             }
         }
         // 明显异常状态（候选端口都被占）→ 显式报错，不偷偷换随机端口（换了 origin 就变）
-        Log.e(TAG, "本地端口候选 ${preferredPorts.joinToString()} 全部被占用")
+        DiagLog.e(TAG, "本地端口候选 ${preferredPorts.joinToString()} 全部被占用")
         return -1
     }
 
@@ -259,7 +259,7 @@ class SshTunnel(
         if (auth is Auth.KeyPair) {
             args += listOf("-i", auth.privateKeyFile.absolutePath)
             auth.passphrase?.takeIf { it.isNotEmpty() }?.let {
-                Log.w(TAG, "key passphrase unsupported by dbclient CLI; try without")
+                DiagLog.w(TAG, "key passphrase unsupported by dbclient CLI; try without")
             }
         }
         args += "$sshUser@$sshHost"
@@ -271,7 +271,7 @@ class SshTunnel(
         onStateChange?.invoke("connecting")
         val bin = binPath
         if (bin == null) {
-            Log.e(TAG, "dbclient path not set — DshApp.onCreate should inject it")
+            DiagLog.e(TAG, "dbclient path not set — DshApp.onCreate should inject it")
             onStateChange?.invoke("failed: 内部错误（dbclient 路径未设置）")
             return false
         }
@@ -286,7 +286,7 @@ class SshTunnel(
                 return false
             }
             val args = buildArgs(bin, port)
-            Log.i(TAG, "dbclient tune #$attempt: ${args.joinToString(" ").take(160)}")
+            DiagLog.i(TAG, "dbclient tune #$attempt: ${args.joinToString(" ").take(160)}")
             val sink = LogSink()
             val p = try {
                 val pb = ProcessBuilder(args).redirectErrorStream(true)
@@ -294,7 +294,7 @@ class SshTunnel(
                 baseEnv().forEach { (k, v) -> pb.environment().put(k, v) }
                 pb.start()
             } catch (e: Exception) {
-                Log.w(TAG, "dbclient launch failed: ${e.message}")
+                DiagLog.w(TAG, "dbclient launch failed: ${e.message}")
                 if (attempt == MAX_ATTEMPTS) onStateChange?.invoke("failed: ${e.message}")
                 continue
             }
@@ -307,7 +307,7 @@ class SshTunnel(
             if (!ready || !p.isAlive) {
                 val state = if (p.isAlive) "alive" else "exited rc=${runCatching { p.exitValue() }.getOrNull()}"
                 val err = sink.text()
-                Log.w(TAG, "dbclient tune #$attempt 未就绪（$state）: ${err.take(200)}")
+                DiagLog.w(TAG, "dbclient tune #$attempt 未就绪（$state）: ${err.take(200)}")
                 reap(p)
                 if (attempt == MAX_ATTEMPTS) {
                     val why = err.ifEmpty { "连接超时（$state）" }
@@ -318,13 +318,13 @@ class SshTunnel(
             // 等待期间隧道可能已被 close()（用户在连接屏重连 / 换了配置）——
             // 那就别再认领这个进程，否则它会在新隧道旁边抢端口
             if (!started.get()) {
-                Log.i(TAG, "隧道已关闭，放弃本次连接结果")
+                DiagLog.i(TAG, "隧道已关闭，放弃本次连接结果")
                 reap(p)
                 return false
             }
             // 端口能连还不够：确认隧道真的能把流量送出去再收回来
             if (!probeDataPlane(port)) {
-                Log.w(TAG, "dbclient tune #$attempt 端口就绪但探针无响应，丢弃重试")
+                DiagLog.w(TAG, "dbclient tune #$attempt 端口就绪但探针无响应，丢弃重试")
                 reap(p)
                 if (attempt == MAX_ATTEMPTS) {
                     onStateChange?.invoke(
@@ -372,7 +372,7 @@ class SshTunnel(
             try {
                 p.inputStream.bufferedReader().forEachLine {
                     sink.append(it)
-                    Log.i(TAG, "dbclient: $it")
+                    DiagLog.i(TAG, "dbclient: $it")
                 }
             } catch (_: Exception) {}
         }.apply { isDaemon = true; name = "dbclient-log"; start() }
@@ -398,7 +398,7 @@ class SshTunnel(
         try {
             p.destroy()
             if (!p.waitFor(REAP_WAIT_MS, TimeUnit.MILLISECONDS)) {
-                Log.w(TAG, "dbclient 未在 ${REAP_WAIT_MS}ms 内退出，强制杀")
+                DiagLog.w(TAG, "dbclient 未在 ${REAP_WAIT_MS}ms 内退出，强制杀")
                 p.destroyForcibly()
                 p.waitFor(REAP_WAIT_MS, TimeUnit.MILLISECONDS)
             }
@@ -468,7 +468,7 @@ class SshTunnel(
             reader.join(500)
             out.toString().trim().takeIf { it.isNotEmpty() }
         } catch (e: Exception) {
-            Log.w(TAG, "execOnce failed: ${e.message}")
+            DiagLog.w(TAG, "execOnce failed: ${e.message}")
             null
         }
     }

@@ -1,12 +1,19 @@
 package com.dshhandheld.app
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.Application
+import android.app.ApplicationExitInfo
 import android.content.MutableContextWrapper
-import android.util.Log
+import android.os.Build
 import android.webkit.WebView
+import androidx.annotation.RequiresApi
+import com.dshhandheld.diag.DiagLog
 import com.dshhandheld.protocol.SshTunnel
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -59,12 +66,12 @@ class DshApp : Application() {
         val wrapper = retainedWebViewContext
         if (existing != null && wrapper != null) {
             if (wrapper.baseContext !== activity) {
-                Log.i(TAG, "obtainWebView: 复用保活实例，context → ${activity.javaClass.simpleName}")
+                DiagLog.i(TAG, "obtainWebView: 复用保活实例，context → ${activity.javaClass.simpleName}")
                 wrapper.baseContext = activity
             }
             return existing
         }
-        Log.i(TAG, "obtainWebView: 首次创建")
+        DiagLog.i(TAG, "obtainWebView: 首次创建")
         val w = MutableContextWrapper(activity)
         retainedWebViewContext = w
         return WebView(w).also { retainedWebView = it }
@@ -78,7 +85,7 @@ class DshApp : Application() {
     fun releaseWebViewContext() {
         retainedWebViewContext?.let {
             if (it.baseContext !== this) {
-                Log.i(TAG, "releaseWebViewContext: context → application")
+                DiagLog.i(TAG, "releaseWebViewContext: context → application")
                 it.baseContext = this
             }
         }
@@ -111,11 +118,77 @@ class DshApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // 诊断日志必须最先起来：后面每一行 DiagLog 都依赖它把文件打开
+        DiagLog.init(filesDir)
+        DiagLog.i(TAG, "DshApp.onCreate: ${pkgVersion()}")
+        reportLastExit()
         SshTunnel.binPath = File(applicationInfo.nativeLibraryDir, "libdbclient.so")
             .takeIf { it.exists() }?.absolutePath
         // HOME 用 filesDir，与终端模式（TuiActivity）一致：两边写同一份 known_hosts，
         // TOFU 信任才不会分裂成两份。见 SshTunnel.homeDir。
         SshTunnel.homeDir = filesDir.absolutePath
+    }
+
+    private fun pkgVersion(): String = try {
+        "v${packageManager.getPackageInfo(packageName, 0).versionName}"
+    } catch (_: Exception) {
+        "v?"
+    }
+
+    /**
+     * 把「上一次进程为什么没了」记进诊断日志。
+     *
+     * 数据源是系统落盘的 `ApplicationExitInfo`（API 30+）—— 系统里**唯一**既重启不丢、
+     * 应用自己又读得到的记录（logcat 读不到；dropbox 要 DUMP 权限，只有 adb 能看）。
+     * 实测正是靠它把「客户端突然没了」定性成 `reason=3 (LOW_MEMORY)` 而不是崩溃：
+     * `dumpsys activity exit-info` 里是同一份数据，但那个要电脑。
+     */
+    private fun reportLastExit() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) reportLastExitR()
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun reportLastExitR() {
+        try {
+            val am = getSystemService(ActivityManager::class.java) ?: return
+            val reasons = am.getHistoricalProcessExitReasons(packageName, 0, 3)
+            if (reasons.isEmpty()) {
+                DiagLog.i(TAG, "退出历史: 无记录")
+                return
+            }
+            val fmt = SimpleDateFormat("MM-dd HH:mm:ss", Locale.US)
+            reasons.forEachIndexed { i, r ->
+                DiagLog.w(TAG, "退出历史 #$i: ${fmt.format(Date(r.timestamp))} ${exitReasonText(r.reason)}"
+                    + " importance=${r.importance} rss=${r.rss / 1024}MB desc=${r.description}")
+            }
+            // 最近一条单独留给诊断页顶部显示
+            val r0 = reasons[0]
+            DiagLog.lastExitSummary = fmt.format(Date(r0.timestamp)) + "  " + exitReasonText(r0.reason)
+        } catch (e: Exception) {
+            // 个别 ROM 会对非系统包拒绝这个查询；记录但不影响启动
+            DiagLog.w(TAG, "读退出历史失败: ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun exitReasonText(reason: Int): String = when (reason) {
+        ApplicationExitInfo.REASON_EXIT_SELF -> "正常退出"
+        ApplicationExitInfo.REASON_SIGNALED -> "被信号杀死"
+        ApplicationExitInfo.REASON_LOW_MEMORY -> "系统内存不足被杀"
+        ApplicationExitInfo.REASON_CRASH -> "崩溃（Java 异常）"
+        ApplicationExitInfo.REASON_CRASH_NATIVE -> "崩溃（native）"
+        ApplicationExitInfo.REASON_ANR -> "无响应（ANR）"
+        ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "初始化失败"
+        ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "权限变更"
+        ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "资源占用过高"
+        ApplicationExitInfo.REASON_USER_REQUESTED -> "用户主动停止"
+        ApplicationExitInfo.REASON_USER_STOPPED -> "被用户停止"
+        ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "依赖进程死亡"
+        ApplicationExitInfo.REASON_FREEZER -> "被冻结"
+        ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE -> "包状态变更"
+        ApplicationExitInfo.REASON_PACKAGE_UPDATED -> "应用被更新"
+        ApplicationExitInfo.REASON_OTHER -> "其它"
+        else -> "未知（$reason）"
     }
 
     // ── 隧道所有权 ────────────────────────────────────────────────
@@ -136,7 +209,7 @@ class DshApp : Application() {
         synchronized(tunnelLock) {
             val cur = sshTunnel
             if (!force && cur != null && tunnelFingerprint == fp && cur.isHealthy()) {
-                Log.i(TAG, "ensureTunnel: 复用已有隧道 ${cur.localBaseUrl}")
+                DiagLog.i(TAG, "ensureTunnel: 复用已有隧道 ${cur.localBaseUrl}")
                 return cur
             }
             cur?.close()
@@ -147,21 +220,21 @@ class DshApp : Application() {
             t.onStateChange = { s ->
                 // 只记日志：状态条由 ①②③ 引导流程表达，connecting/connected 属内部
                 // 状态（曾显示为「隧道: connected」，是术语）。
-                Log.i(TAG, "tunnel state: $s")
+                DiagLog.i(TAG, "tunnel state: $s")
             }
             t.onLocalBaseChanged = { b ->
-                Log.i(TAG, "tunnel base changed: $b")
+                DiagLog.i(TAG, "tunnel base changed: $b")
                 tunnelObservers.forEach { it.onTunnelBaseChanged(b) }
             }
             t.start()
             if (t.localBaseUrl == null) {
                 t.close()
-                Log.w(TAG, "ensureTunnel: 拨号失败")
+                DiagLog.w(TAG, "ensureTunnel: 拨号失败")
                 return null
             }
             sshTunnel = t
             tunnelFingerprint = fp
-            Log.i(TAG, "ensureTunnel: 已建立 ${t.localBaseUrl}")
+            DiagLog.i(TAG, "ensureTunnel: 已建立 ${t.localBaseUrl}")
             return t
         }
     }

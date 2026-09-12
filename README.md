@@ -315,9 +315,23 @@ node scripts/check-mobile-hooks.mjs
 
 ---
 
-## 已知问题
+## 已知问题与取证
 
-见 [`docs/known-issues.md`](docs/known-issues.md)（含两处已定性待修行为与日志排查说明）。
+见 [`docs/known-issues.md`](docs/known-issues.md)。
+
+### 出问题时怎么拿到证据
+
+- **在手机上**：连接屏右上角 **「诊断」** —— 显示上次进程退出原因（低内存被杀 / 崩溃 /
+  被用户停止）、本次运行的日志、以及磁盘上含上次运行的日志尾部，可一键复制。不需要电脑。
+  为什么必须由 App 自己记：普通应用**读不到 logcat**，而 logcat 本身也只是内存环形缓冲
+  （详见 `docs/known-issues.md` §四）。
+- **连着电脑时**：先压掉三星每帧一条的刷屏，否则 5 MiB 的 logcat 缓冲撑不到 5 分钟，
+  我们的行会被冲光（曾因此误判为「没打日志」）：
+
+  ```sh
+  adb shell setprop log.tag.View W     # 实测 662 条/10s → 1 条/10s；重启自动失效
+  adb logcat | grep -E "DshApp|DshHandheld|SshTunnel|TuiActivity|DiagLog"
+  ```
 
 ---
 
