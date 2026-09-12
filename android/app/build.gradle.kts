@@ -83,6 +83,24 @@ android {
         }
     }
 
+    packaging {
+        jniLibs {
+            // 等价于原先写在 AndroidManifest 里的 android:extractNativeLibs="true"。
+            // AGP 9 起在 manifest 里**显式**写那个属性会直接构建失败：
+            //   android:extractNativeLibs is set to "true" in AndroidManifest.xml. Avoid
+            //   setting android:extractNativeLibs="true" explicitly in AndroidManifest.xml,
+            //   and instead set android.packagingOptions.jniLibs.useLegacyPackaging to true
+            //   in the build script.
+            //
+            // 这里**必须**是 true，不是风格问题：dbclient / dropbearkey 是以**子进程**方式
+            // 执行的，要有文件系统上的真实路径才能 execve。DshApp.onCreate 从
+            // applicationInfo.nativeLibraryDir 取 libdbclient.so 的绝对路径，且要求
+            // it.exists() —— useLegacyPackaging=false 时原生库不再解包出来（直接以页对齐
+            // 方式留在 APK 里供 dlopen），那个路径不存在，binPath 会保持 null，隧道起不来。
+            useLegacyPackaging = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

@@ -15,8 +15,16 @@
         android:label="DSH Handheld"
         android:supportsRtl="true"
         android:theme="@style/Theme.DshHandheld"
-        android:usesCleartextTraffic="true"
-        android:extractNativeLibs="true">
+        android:usesCleartextTraffic="true">
+
+        <!-- 这里原先写 android:extractNativeLibs="true"。AGP 9 起在 manifest 里**显式**写这个
+             属性会直接构建失败，要求改到 build 脚本里表达（语义不变，AGP 会自己把该属性写进
+             合并后的 manifest）。对应 app/build.gradle.kts 的 android.packaging.jniLibs 块。
+
+             它必须保持为 true：dbclient / dropbearkey 是以子进程方式执行的，
+             DshApp.onCreate 要从 applicationInfo.nativeLibraryDir 取 libdbclient.so 的绝对
+             路径（且要求 it.exists()）。useLegacyPackaging=false 时原生库不再解包到文件系统，
+             那个路径不存在 → binPath 为 null → 隧道直接起不来。 -->
 
         <activity
             android:name=".MainActivity"
