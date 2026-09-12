@@ -1241,14 +1241,28 @@ class MainActivity : Activity() {
         box.addView(row, rowParams(top = dp(10), width = ViewGroup.LayoutParams.MATCH_PARENT))
         box.visibility = View.VISIBLE
 
+        // ⚠️ WebView 的方法**只能在主线程**调用（`webView.url` 也不例外）。
+        // 采集在后台线程跑，所以必须在起线程**之前**把它读下来 ——
+        // 0.1.6 就是漏了这一步，一按「诊断」就
+        // `A WebView method was called on thread 'diag-collect'` 崩掉。
+        val webUrl = webView?.url
         Thread {
-            val text = buildDiagText()
+            // 诊断页自己绝不能把 App 弄死：收集失败就显示失败
+            val text = try {
+                buildDiagText(webUrl)
+            } catch (e: Throwable) {
+                "（收集失败：${e.javaClass.simpleName}: ${e.message}）"
+            }
             onUi { if (diagView?.visibility == View.VISIBLE) diagBody?.text = text }
         }.apply { name = "diag-collect"; isDaemon = true }.start()
     }
 
-    /** 诊断页正文。**在后台线程组装**（[SshTunnel.isHealthy] 会阻塞）。 */
-    private fun buildDiagText(): String {
+    /**
+     * 诊断页正文。**在后台线程组装**（[SshTunnel.isHealthy] 会阻塞）。
+     *
+     * @param webUrl 由调用方在**主线程**上取好传进来 —— 这里不能碰 `webView`。
+     */
+    private fun buildDiagText(webUrl: String?): String {
         val t = (application as? DshApp)?.sshTunnel
         return buildString {
             append("── 上次退出 ──\n")
@@ -1259,7 +1273,7 @@ class MainActivity : Activity() {
             append("隧道       ").append(t?.localBaseUrl ?: "（无）")
             if (t != null) append("   健康=").append(t.isHealthy())
             append('\n')
-            append("WebView    ").append(webView?.url ?: "（无）").append('\n')
+            append("WebView    ").append(webUrl ?: "（无）").append('\n')
             append("prefs[url] ").append(prefs.getString("url", null) ?: "（无）").append('\n')
             append("\n── 本次运行日志（").append(DiagLog.stats()).append("）──\n")
             append(DiagLog.snapshot().ifEmpty { "（空）" }).append('\n')
