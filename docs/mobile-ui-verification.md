@@ -37,7 +37,7 @@ node scripts/check-mobile-hooks.mjs --contract
 ```
 
 不需要浏览器、不需要装 dsh。它断言**插件实际读取的 dsh 钩子**与
-`android/app/src/main/assets/plugins/mobile-hooks-contract.json` 里声明的**完全一致**。
+`scripts/mobile-hooks-contract.json` 里声明的**完全一致**。
 
 意义：重新 vendoring 插件会改变依赖集合，那必须是**显式动作**（更新契约），
 而不是悄悄多依赖几个没人验证过的钩子。

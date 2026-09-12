@@ -6,22 +6,46 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.Collections
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * SSH 本地端口转发 —— dbclient 进程方案（方案 B）。
+ * SSH 本地端口转发 —— dbclient 进程方案。
  *
  * 与终端模式（TuiActivity）共用同一我们 CI 编译的 dropbear dbclient：
  * 密码/证书/TOFU（-y）/known_hosts（HOME）走完全一致的环境变量与参数，
  * 不再引入第二套 SSH 实现（JSch 依赖移除后，认证行为 100% 统一）。
  *
- * 转发实现：`dbclient -p <sshPort> -y -q -K 30 -N
- *   -L 127.0.0.1:<localPort>:<remoteHost>:<remotePort> user@host`
+ * 转发实现：`dbclient -p <sshPort> -y -q -N -o ExitOnForwardFailure=yes
+ *   -o BatchMode=yes -L 127.0.0.1:<localPort>:<remoteHost>:<remotePort> user@host`
  *  - `-N`：不执行远程命令（纯隧道）
+ *  - `-o ExitOnForwardFailure=yes`：本地转发 bind 失败（端口被占）时**进程退出**，
+ *    而不是继续活着假装在工作。这是"隧道死了但看起来连着"的来源之一。
+ *  - `-o BatchMode=yes`：永不读 stdin 等提示（无 tty 时任何提问都会永久挂住）。
+ *    未知的 `-o` 选项只会打 warning 不会退出，所以这两条对旧 dropbear 也安全。
  *  - `-L`：本地转发。注意 dropbear 的 -L 端口 0 **不自分配**（JSch 有此能力，
  *    dbclient 没有），因此本地端口由本类预选（bind(0) 拿系统分配的空闲端口）。
+ *  - ⚠️ **没有** `-T` 连接超时：dropbear 的 `-T` 是"不分配 pty"（见 cli-runopts.c），
+ *    不是超时。连接超时由 [waitForLocal] 的失败路径实现（杀进程重试）。
  *  - 断线：dbclient 进程退出 → 看门狗检测 → 重建（新端口 → onLocalBaseChanged）。
+ *
+ * ## 健康判定：真流量，不是"端口能连"
+ *
+ * [isHealthy] 与看门狗都用 [probeDataPlane]：**往转发口发一个真实 HTTP 请求**，
+ * 收到任意 HTTP 状态行才算通。只探测"127.0.0.1:<port> 能 connect"是不够的 ——
+ * 监听 socket 可能属于一个已被替换下来、SSH 通道已死的残留进程，那种情况下 connect
+ * 立刻成功、真正的请求却永远没有回应，于是隧道"看起来连着"但页面永远转圈（实测过）。
+ * 同一个探针同时就是这个隧道的 keepalive（周期性制造双向流量）。
+ *
+ * 隧道远端固定是 dsh web 的 HTTP 端点（[com.dshhandheld.app.SshConfig.DEFAULT_REMOTE_PORT]），
+ * 所以用 HTTP 判定健康是成立的，也是用户真正关心的那个条件。
+ *
+ * ## 进程所有权：单一 owner + 全量回收
+ *
+ * [spawned] 记录派生过的每一个 dbclient，重建前先把旧 owner 回收掉：残留进程会一直
+ * 占着本地端口（导致新进程 bind 失败、并让端口从 3080 漂到 13080，进而改变 WebView
+ * 的 origin），也会让健康检查被"冒名者"骗过。
  *
  * 令牌获取（[execOnce]）：同样用 dbclient 一次性进程执行
  * `dbclient -y -q -K 3 user@host "<cmd>"` 收集 stdout（命令模式无 pty）。
@@ -56,8 +80,22 @@ class SshTunnel(
 
     private val started = AtomicBoolean(false)
     private val connecting = AtomicBoolean(false)
+
+    /** 当前 owner：唯一被认作"我们的隧道"的 dbclient。 */
     @Volatile private var proc: Process? = null
+
+    /**
+     * 派生过的**全部** dbclient（含已被替换下来的）。不回收就会泄漏：每个残留进程
+     * 都占着一条 SSH 会话，并且可能继续监听着本地端口，让新进程 bind 失败
+     * （实测 "Address already in use"），同时让健康检查被"冒名者"骗过。
+     */
+    private val spawned: MutableList<Process> = Collections.synchronizedList(mutableListOf())
+
     @Volatile private var localPort: Int = 0
+
+    /** 连续多少次重建都没能拿到可用隧道 —— 用于退避，别对着 SSH 服务端打连环拳。 */
+    @Volatile private var consecutiveFailures: Int = 0
+
     private var reconnectThread: Thread? = null
 
     /** 隧道就绪后手机侧访问的本地基址（http://127.0.0.1:<port>）。 */
@@ -69,41 +107,100 @@ class SshTunnel(
     /** 本地端口/基址变化（断线重连后会更换端口）；调用方需据此重新加载。 */
     @Volatile var onLocalBaseChanged: ((String) -> Unit)? = null
 
-    /** 建立隧道并阻塞等待本地监听就绪（最多 ~10s）。成功返回本地端口。 */
+    /** 建立隧道并阻塞等待本地监听就绪（最多 [LOCAL_READY_TIMEOUT_MS] × [MAX_ATTEMPTS]）。成功返回本地端口。 */
     @Synchronized
     fun start(): Int {
         if (started.get()) return localPort
         started.set(true)
         connectOnce()
-        // 守护重连：dbclient 进程退出（网络断/服务端关）后重建
+        // 守护：周期性探真流量（兼 keepalive），连续失败才判定不健康并重建
         reconnectThread = Thread {
+            var misses = 0
             while (started.get()) {
-                if (!isAlive()) {
-                    onStateChange?.invoke("reconnecting")
-                    if (connecting.compareAndSet(false, true)) {
-                        try { connectOnce() } finally { connecting.set(false) }
+                val up = isHealthy()
+                if (up) {
+                    misses = 0
+                    consecutiveFailures = 0
+                } else {
+                    misses++
+                    if (misses >= PROBE_MISS_LIMIT) {
+                        misses = 0
+                        onStateChange?.invoke("reconnecting")
+                        if (connecting.compareAndSet(false, true)) {
+                            try {
+                                if (!connectOnce()) consecutiveFailures++
+                            } finally {
+                                connecting.set(false)
+                            }
+                        }
                     }
                 }
-                try { Thread.sleep(if (isAlive()) 5_000L else 2_000L) } catch (_: InterruptedException) { return@Thread }
+                val sleepMs = when {
+                    up -> PROBE_INTERVAL_MS
+                    consecutiveFailures > 0 -> backoffMs()
+                    else -> PROBE_RETRY_MS
+                }
+                try { Thread.sleep(sleepMs) } catch (_: InterruptedException) { return@Thread }
             }
         }.apply { isDaemon = true; name = "ssh-tunnel-watchdog"; start() }
         return localPort
     }
 
-    /** 隧道是否可用（进程存活 + 本地端口在监听）。供复用判定：DshApp 只在
-     *  「配置未变且健康」时把已有隧道交给下一个调用方，否则重建。 */
-    fun isHealthy(): Boolean = isAlive()
-
-    private fun isAlive(): Boolean {
+    /**
+     * 隧道是否可用：owner 存活 **且真的能过流量**（[probeDataPlane]）。
+     *
+     * 供复用判定：DshApp 只在「配置未变且健康」时把已有隧道交给下一个调用方，否则
+     * 重建；MainActivity 回到前台时也用它决定要不要重连。因此这里必须用真探针 ——
+     * 只看"端口能连"会把一条已经死掉的隧道判成健康，然后继续复用它（实测过）。
+     *
+     * ⚠️ 会阻塞到探针超时（正常几毫秒，异常最多 [PROBE_TIMEOUT_MS]），
+     * 调用方必须在后台线程调用。
+     */
+    fun isHealthy(): Boolean {
         val p = proc ?: return false
         if (!p.isAlive) return false
-        return localPort > 0 && localListening()
+        val port = localPort
+        return port > 0 && probeDataPlane(port)
     }
 
-    private fun localListening(): Boolean = try {
-        Socket().use { it.connect(InetSocketAddress("127.0.0.1", localPort), 500) }
-        true
+    /**
+     * 真流量探针：往本地转发口发一个最小 HTTP 请求，收到任意 HTTP 状态行即算通
+     * （dsh web 对无令牌请求回 401，同样算通）。
+     *
+     * 为什么不能用"能 connect"代替：本地监听可能属于一个已被替换、SSH 通道已死的
+     * 残留进程 —— connect 立刻成功，请求却永远没有回应。这正是网页模式
+     * "看起来连着、页面永远转圈"的成因。
+     *
+     * 同时它就是这个隧道的 keepalive：周期性的真实双向流量，比 SSH 层的空 keepalive
+     * 更能防止链路被中间设备（NAT / WiFi 省电）静默丢弃。
+     */
+    private fun probeDataPlane(port: Int, timeoutMs: Int = PROBE_TIMEOUT_MS): Boolean = try {
+        Socket().use { s ->
+            s.connect(InetSocketAddress("127.0.0.1", port), PROBE_CONNECT_MS)
+            s.soTimeout = timeoutMs
+            s.getOutputStream().apply {
+                write(("GET / HTTP/1.0\r\nHost: 127.0.0.1:$port\r\n"
+                    + "Connection: close\r\n\r\n").toByteArray())
+                flush()
+            }
+            val buf = ByteArray(16)
+            var n = 0
+            // 单次 read 可能只回来 "HT"，读到够判定的字节数或流结束为止
+            while (n < 5) {
+                val r = s.getInputStream().read(buf, n, buf.size - n)
+                if (r <= 0) break
+                n += r
+            }
+            n >= 5 && String(buf, 0, 5, Charsets.US_ASCII) == "HTTP/"
+        }
     } catch (_: Exception) { false }
+
+    /** 重建连续失败后的退避：OpenSSH 9.8+ 默认开着 PerSourcePenalties，别打连环拳。 */
+    private fun backoffMs(): Long = when (consecutiveFailures) {
+        0, 1 -> 5_000L
+        2 -> 15_000L
+        else -> 45_000L
+    }
 
     /**
      * 选本地转发端口：按 [PORT_CANDIDATES] 顺序取第一个空闲的（**不用随机端口**）。
@@ -116,6 +213,9 @@ class SshTunnel(
      * 覆盖而不是累积（HTTP 431 那次的根因）。
      *
      * 首选 3080 与 dsh web 的默认端口一致，撞车时退到 13080。
+     *
+     * ⚠️ 实测过的漂移：残留 dbclient 占着 3080 时会退到 13080，origin 随之改变 ——
+     * 所以 [connectOnce] 必须在选端口前先回收旧 owner，否则端口稳定性无从谈起。
      */
     private fun pickFreePort(): Int {
         for (p in preferredPorts) {
@@ -138,68 +238,105 @@ class SshTunnel(
         false
     }
 
-    private fun connectOnce() {
+    private fun buildArgs(bin: String, port: Int): List<String> {
+        val args = mutableListOf(
+            bin,
+            "-p", sshPort.toString(),
+            "-y",                 // 首连接受未知主机公钥（TOFU，与终端模式一致）
+            "-q",                 // 静默 remote banner/日志
+            // ⚠️ 不用 -K <n>：dropbear keepalive 依赖服务端应答，而本部署的
+            // OpenSSH 10.0p2 不回答其 keepalive（实测 90s=30×3 后
+            // "Keepalive timeout"），隧道必死、页面永远加载不完。
+            // 默认 0 = 永不超时（与电脑端普通 ssh -L 行为一致），
+            // 链路是否还活着由 [probeDataPlane] 的周期性真实流量判定。
+            "-N",                 // 纯隧道，不执行远程命令
+            // bind 失败（端口被占）→ 直接退出，而不是继续活着假装在工作
+            "-o", "ExitOnForwardFailure=yes",
+            // 绝不读 stdin 等提示（无 tty 时会永久挂住）
+            "-o", "BatchMode=yes",
+            "-L", "127.0.0.1:$port:$remoteHost:$remotePort",
+        )
+        if (auth is Auth.KeyPair) {
+            args += listOf("-i", auth.privateKeyFile.absolutePath)
+            auth.passphrase?.takeIf { it.isNotEmpty() }?.let {
+                Log.w(TAG, "key passphrase unsupported by dbclient CLI; try without")
+            }
+        }
+        args += "$sshUser@$sshHost"
+        return args
+    }
+
+    /** @return 是否拿到了可用的隧道（供看门狗统计连续失败次数）。 */
+    private fun connectOnce(): Boolean {
         onStateChange?.invoke("connecting")
         val bin = binPath
         if (bin == null) {
             Log.e(TAG, "dbclient path not set — DshApp.onCreate should inject it")
             onStateChange?.invoke("failed: 内部错误（dbclient 路径未设置）")
-            return
+            return false
         }
-        for (attempt in 1..3) {
-            if (!started.get()) return
+        // 先回收旧 owner：固定端口要立刻能重绑，而且不能让残留进程冒名监听
+        killCurrent()
+        for (attempt in 1..MAX_ATTEMPTS) {
+            if (!started.get()) return false
             val port = pickFreePort()
             if (port < 0) {
                 onStateChange?.invoke(
                     "failed: 本地端口 ${preferredPorts.joinToString(" / ")} 都被占用，请关掉占用它的应用后重试")
-                return
+                return false
             }
-            val args = mutableListOf(
-                bin,
-                "-p", sshPort.toString(),
-                "-y",                 // 首连接受未知主机公钥（TOFU，与终端模式一致）
-                "-q",                 // 静默 remote banner/日志
-                // ⚠️ 不用 -K <n>：dropbear keepalive 依赖服务端应答，而本部署的
-                // OpenSSH 10.0p1 不回答其 keepalive（实测 90s=30×3 后
-                // "Keepalive timeout"），隧道必死、页面永远加载不完。
-                // 默认 0 = 永不超时（与电脑端普通 ssh -L 行为一致），死链由看门狗兜底。
-                "-N",                 // 纯隧道，不执行远程命令
-                "-L", "127.0.0.1:$port:$remoteHost:$remotePort"
-            )
-            if (auth is Auth.KeyPair) {
-                args += listOf("-i", auth.privateKeyFile.absolutePath)
-                auth.passphrase?.takeIf { it.isNotEmpty() }?.let { Log.w(TAG, "key passphrase unsupported by dbclient CLI; try without") }
-            }
-            args += "$sshUser@$sshHost"
+            val args = buildArgs(bin, port)
             Log.i(TAG, "dbclient tune #$attempt: ${args.joinToString(" ").take(160)}")
-            try {
+            val sink = LogSink()
+            val p = try {
                 val pb = ProcessBuilder(args).redirectErrorStream(true)
                 pb.environment().clear()
                 baseEnv().forEach { (k, v) -> pb.environment().put(k, v) }
-                val p = pb.start()
-                // 立即等待端口就绪（进程可能秒退：认证失败等）
-                waitForLocal(port, p, timeoutMs = 8_000)
-                if (!p.isAlive) {
-                    val err = p.inputStream.bufferedReader().readText().trim()
-                    Log.w(TAG, "dbclient tune #$attempt exited rc=${p.exitValue()}: ${err.take(200)}")
-                    if (attempt == 3) onStateChange?.invoke("failed: $err")
-                    continue
-                }
-                proc = p
-                localPort = port
-                val base = "http://127.0.0.1:$port"
-                val changed = localBaseUrl != base
-                val first = localBaseUrl == null
-                localBaseUrl = base
-                pumpLogs(p)
-                onStateChange?.invoke("connected")
-                if (changed && !first) onLocalBaseChanged?.invoke(base)
-                return
+                pb.start()
             } catch (e: Exception) {
                 Log.w(TAG, "dbclient launch failed: ${e.message}")
-                if (attempt == 3) onStateChange?.invoke("failed: ${e.message}")
+                if (attempt == MAX_ATTEMPTS) onStateChange?.invoke("failed: ${e.message}")
+                continue
             }
+            spawned.add(p)
+            pumpLogs(p, sink)
+            // 端口就绪 = TCP 连上 + 认证通过（dropbear 在会话建立后才 bind -L）。
+            // 这一步同时充当连接超时：卡死的 connect 实测要 3 分钟以上，
+            // 而正常连上只要 0.5–3s（链路吃紧时见过 9–14s）。
+            val ready = waitForLocal(port, p, LOCAL_READY_TIMEOUT_MS)
+            if (!ready || !p.isAlive) {
+                val state = if (p.isAlive) "alive" else "exited rc=${runCatching { p.exitValue() }.getOrNull()}"
+                val err = sink.text()
+                Log.w(TAG, "dbclient tune #$attempt 未就绪（$state）: ${err.take(200)}")
+                reap(p)
+                if (attempt == MAX_ATTEMPTS) {
+                    val why = err.ifEmpty { "连接超时（$state）" }
+                    onStateChange?.invoke("failed: $why")
+                }
+                continue
+            }
+            // 端口能连还不够：确认隧道真的能把流量送出去再收回来
+            if (!probeDataPlane(port)) {
+                Log.w(TAG, "dbclient tune #$attempt 端口就绪但探针无响应，丢弃重试")
+                reap(p)
+                if (attempt == MAX_ATTEMPTS) {
+                    onStateChange?.invoke(
+                        "failed: 本地端口已就绪，但对 dsh 的请求无响应"
+                            + "（隧道可能已断，或电脑上的 dsh 没在运行）")
+                }
+                continue
+            }
+            proc = p
+            localPort = port
+            val base = "http://127.0.0.1:$port"
+            val changed = localBaseUrl != base
+            val first = localBaseUrl == null
+            localBaseUrl = base
+            onStateChange?.invoke("connected")
+            if (changed && !first) onLocalBaseChanged?.invoke(base)
+            return true
         }
+        return false
     }
 
     /** 轮询本地端口可连 + 进程存活，等待隧道就绪。返回进程是否仍存活。 */
@@ -216,12 +353,64 @@ class SshTunnel(
         return false
     }
 
-    /** 消费 dbclient 输出（-q 后信息很少，认证错误行仍会打印），避免管道阻塞。 */
-    private fun pumpLogs(p: Process) {
+    /**
+     * 消费 dbclient 输出（-q 后信息很少，认证/转发错误行仍会打印），避免管道阻塞，
+     * 同时把最近几行留在 [sink] 里供失败诊断。
+     *
+     * 为什么不让调用方直接读 `p.inputStream`：那是阻塞读到 EOF 的，进程还活着
+     * （连接卡住）时会把调用线程永久挂住。
+     */
+    private fun pumpLogs(p: Process, sink: LogSink) {
         Thread {
-            try { p.inputStream.bufferedReader().forEachLine { Log.i(TAG, "dbclient: $it") } }
-            catch (_: Exception) {}
+            try {
+                p.inputStream.bufferedReader().forEachLine {
+                    sink.append(it)
+                    Log.i(TAG, "dbclient: $it")
+                }
+            } catch (_: Exception) {}
         }.apply { isDaemon = true; name = "dbclient-log"; start() }
+    }
+
+    /** 最近一次 dbclient 尝试的输出（有上限，读它不会阻塞）。 */
+    private class LogSink {
+        private val sb = StringBuilder()
+        @Synchronized fun append(line: String) {
+            if (sb.length < SINK_LIMIT) sb.append(line).append('\n')
+        }
+        @Synchronized fun text(): String = sb.toString().trim()
+        private companion object { const val SINK_LIMIT = 4_000 }
+    }
+
+    /** 杀掉一个 dbclient 并等它真正退出（destroy 是异步的，端口要等进程没了才释放）。 */
+    private fun reap(p: Process) {
+        spawned.remove(p)
+        if (proc === p) {
+            proc = null
+            localPort = 0
+        }
+        try {
+            p.destroy()
+            if (!p.waitFor(REAP_WAIT_MS, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "dbclient 未在 ${REAP_WAIT_MS}ms 内退出，强制杀")
+                p.destroyForcibly()
+                p.waitFor(REAP_WAIT_MS, TimeUnit.MILLISECONDS)
+            }
+        } catch (_: Exception) {}
+    }
+
+    /** 回收当前 owner（刻意不碰 [localBaseUrl]：重建后端口相同时 origin 不变）。 */
+    private fun killCurrent() {
+        proc?.let { reap(it) }
+        proc = null
+        localPort = 0
+    }
+
+    /** 回收**全部**派生过的 dbclient —— 只收最后一个会留下占着端口和 SSH 会话的幽灵。 */
+    private fun killAll() {
+        val all = synchronized(spawned) { spawned.toList() }
+        for (p in all) reap(p)
+        proc = null
+        localPort = 0
     }
 
     /** 与终端模式一致的认证 env（HOME 写 known_hosts；密码经 DROPBEAR_PASSWORD）。 */
@@ -264,7 +453,11 @@ class SshTunnel(
             }.apply { isDaemon = true; start() }
             val deadline = System.currentTimeMillis() + timeoutMs
             while (p.isAlive && System.currentTimeMillis() < deadline) Thread.sleep(100)
-            if (p.isAlive) p.destroy()
+            if (p.isAlive) {
+                // 超时也要**确实**收掉：留着的话它占着一条 SSH 会话不下来
+                p.destroy()
+                if (!p.waitFor(1_000, TimeUnit.MILLISECONDS)) p.destroyForcibly()
+            }
             reader.join(500)
             out.toString().trim().takeIf { it.isNotEmpty() }
         } catch (e: Exception) {
@@ -276,22 +469,27 @@ class SshTunnel(
     override fun close() {
         started.set(false)
         reconnectThread?.interrupt()
-        val dying = proc
-        proc = null
-        try { dying?.destroy() } catch (_: Exception) {}
-        // 等旧 dbclient 真正退出：固定端口要立刻重绑，残留进程会占着监听 socket
-        // （Process.destroy 是异步的）。正常几十毫秒就退，只有异常情况才等到超时。
-        try {
-            if (dying != null && !dying.waitFor(1500, TimeUnit.MILLISECONDS)) {
-                Log.w(TAG, "dbclient 未在 1.5s 内退出，强制杀")
-                dying.destroyForcibly()
-            }
-        } catch (_: Exception) {}
+        reconnectThread = null
+        killAll()
         localBaseUrl = null
     }
 
     companion object {
         private const val TAG = "SshTunnel"
+
+        /** 单次尝试里"连接 + 认证 + 本地监听就绪"的等待上限。 */
+        private const val LOCAL_READY_TIMEOUT_MS = 15_000L
+        private const val MAX_ATTEMPTS = 3
+        private const val REAP_WAIT_MS = 1_500L
+
+        /** 隧道 keepalive / 健康检查周期。 */
+        private const val PROBE_INTERVAL_MS = 30_000L
+        /** 判定不健康后的短重试间隔。 */
+        private const val PROBE_RETRY_MS = 3_000L
+        /** 连续失败达到这个次数才拆掉重建（避开单次抖动）。 */
+        private const val PROBE_MISS_LIMIT = 2
+        private const val PROBE_CONNECT_MS = 1_500
+        private const val PROBE_TIMEOUT_MS = 3_000
 
         /** WebView 用的本地转发端口候选（按序取第一个空闲的）：3080 与 dsh web
          *  默认端口一致，被占时退到 13080。端口必须稳定，理由见 [pickFreePort]。 */

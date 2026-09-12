@@ -284,7 +284,7 @@ dsh 官方 Web 前端是桌面布局，窄屏下侧栏会常驻挤占内容。�
 
 因此有**契约金丝雀**在 CI 里守着：`node scripts/check-mobile-hooks.mjs --contract`
 断言插件实际读取的钩子与提交在仓库里的
-`assets/plugins/mobile-hooks-contract.json` 完全一致 —— 重新 vendoring 若多依赖了
+`scripts/mobile-hooks-contract.json` 完全一致 —— 重新 vendoring 若多依赖了
 没验证过的钩子，CI 直接失败。
 
 **升级 dsh 之后**请在本机跑一次完整检查（需要装着 dsh 的环境）：

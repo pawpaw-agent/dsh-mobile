@@ -1242,6 +1242,61 @@ class MainActivity : Activity() {
         Log.i(TAG, "onResume: url=${webView?.url} tunnel=${(application as DshApp).sshTunnel != null}")
         webView?.onResume(); webView?.resumeTimers()
         refreshConnectState()
+        revalidateTunnel()
+    }
+
+    /**
+     * 回到前台时用**真流量探针**重新确认隧道，必要时重建。
+     *
+     * 为什么必须有这一步：熄屏一段时间后整个进程会被 Android 冻结（实测
+     * `freezer:/frozen`），冻结期间看门狗不运行、dbclient 子进程同样冻在
+     * `connect()` 里（解冻时一起报 "Connect failed: Software caused connection abort"）。
+     * 等用户回来时隧道往往已经死了，而 [DshApp.sshTunnel] 与 `localBaseUrl` 都还在 ——
+     * 直接复用就会把 WebView 留在一条永远加载不完的隧道上。
+     *
+     * 探针会真的往隧道里发一个 HTTP 请求（见 [SshTunnel.isHealthy]），所以它不会把
+     * "端口还在监听"误判成"隧道可用"。健康时什么都不做，不打扰用户。
+     */
+    private fun revalidateTunnel() {
+        val app = application as? DshApp ?: return
+        val tunnel = app.sshTunnel ?: return
+        if (webView?.url?.startsWith("http") != true) return
+        val cfg = SshConfig.load(prefs) ?: return
+        if (!cfg.isComplete) return
+        Thread {
+            if (tunnel.isHealthy()) {
+                Log.i(TAG, "revalidateTunnel: 探针通过，复用现有隧道 ${tunnel.localBaseUrl}")
+                return@Thread
+            }
+            Log.w(TAG, "revalidateTunnel: 探针失败 —— 重建隧道")
+            // 连接守卫与 status() 都必须在 UI 线程上（beginConnect 失败会写状态栏）
+            onUi {
+                if (beginConnect()) rebuildTunnel(cfg)
+                else Log.i(TAG, "revalidateTunnel: 已有连接在进行，让位")
+            }
+        }.apply { name = "tunnel-probe"; isDaemon = true }.start()
+    }
+
+    /** [revalidateTunnel] 的续作：探针判定隧道已死后重建（已在 UI 线程持好连接守卫）。 */
+    private fun rebuildTunnel(cfg: SshConfig) {
+        Thread {
+            val app = application as DshApp
+            val t = app.ensureTunnel(cfg, force = true)
+            val base = t?.localBaseUrl
+            if (base == null) {
+                Log.w(TAG, "rebuildTunnel: 重建失败")
+                onUi { status("重连失败，请回连接屏手动重试"); refreshConnectState(); endConnect() }
+                return@Thread
+            }
+            autoFetchToken(t)
+            onUi {
+                Log.i(TAG, "rebuildTunnel: 已重建 base=$base，重新加载")
+                sshTokenAck = false
+                connectWeb(base)
+                refreshConnectState()
+                endConnect()
+            }
+        }.apply { name = "tunnel-rebuild"; isDaemon = true }.start()
     }
 
     override fun onDestroy() {

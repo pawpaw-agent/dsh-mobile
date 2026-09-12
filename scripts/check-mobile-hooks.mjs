@@ -42,9 +42,14 @@ const BUNDLE = path.join(REPO, 'android/app/src/main/assets/plugins/dsh-web-mobi
 const BOOTSTRAP = path.join(REPO, 'android/app/src/main/assets/plugins/mobile-bootstrap.js');
 const MAIN_ACTIVITY = path.join(
   REPO, 'android/app/src/main/java/com/dshhandheld/app/MainActivity.kt');
-/** 契约文件：把「我们依赖 dsh 的哪些钩子」变成提交在仓库里的声明，供 CI 校验。 */
-const CONTRACT = path.join(
-  REPO, 'android/app/src/main/assets/plugins/mobile-hooks-contract.json');
+/**
+ * 契约文件：把「我们依赖 dsh 的哪些钩子」变成提交在仓库里的声明，供 CI 校验。
+ *
+ * ⚠️ 放在 `scripts/` 而不是 `assets/` —— `assets/` 会被整个打进 APK，这是一份
+ * 只在 CI 里用的声明，不该随应用分发（曾经放错位置并真的进了发布包）。
+ * CI 里有一条断言守着这件事。
+ */
+const CONTRACT = path.join(REPO, 'scripts/mobile-hooks-contract.json');
 
 /**
  * 属于**别的宿主产品**的钩子 —— 这个插件是个「通用适配器」，同时支持若干产品。

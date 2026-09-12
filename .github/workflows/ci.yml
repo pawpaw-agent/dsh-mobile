@@ -52,6 +52,19 @@ jobs:
           fi
           echo "✓ 注入脚本只有 assets 一份"
 
+      - name: Verify nothing CI-only ships inside the APK
+        run: |
+          # assets/ 会被**整个**打进 APK。这里放的东西必须是运行时真正需要的，
+          # 否则每个用户都会下载到一份只对 CI 有意义的文件。
+          # 真实教训：契约文件曾被放在 assets/plugins/ 下，随 0.1.4 发布包一起发了出去。
+          allowed='dsh-web-mobile-client\.js|LICENSE-dsh-web-mobile\.txt|mobile-bootstrap\.js'
+          unexpected=$(ls android/app/src/main/assets/plugins | grep -vEx "$allowed" || true)
+          if [ -n "$unexpected" ]; then
+            echo "::error::assets/plugins 里有非运行时文件（会被打进 APK）：$unexpected"
+            exit 1
+          fi
+          echo "✓ assets/plugins 只含运行时文件"
+
   # Terminal conformance gate: proves the differential test bed still works.
   # Runs first and needs no Android SDK — it is pure JVM, so it finishes in seconds
   # and a failure here means the corpus or the harness rotted, not the app.
